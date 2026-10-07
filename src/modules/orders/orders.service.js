@@ -11,6 +11,7 @@ import { publishOrderStatus } from './order-events.js'
 import { getClient } from '../../config/database.js'
 import { CartRepository } from '../cart/cart.repository.js'
 import { CartService } from '../cart/cart.service.js'
+import { markCartConverted } from '../abandoned-carts/abandoned-carts.hooks.js'
 import { AddressesRepository } from '../addresses/addresses.repository.js'
 import { ShopProductsRepository } from '../shop-products/shop-products.repository.js'
 import { CouponsRepository } from '../coupons/coupons.repository.js'
@@ -372,6 +373,7 @@ export class OrdersService {
     if (payload.paymentMethod === 'COD' || walletCoveredInFull) {
       await this.cartRepo.clearCart(customerId, priceMode)
       await this.cartRepo.clearExtras(customerId, priceMode)
+      await markCartConverted({ userId: customerId, orderId: created[0].id, fastify: this.fastify })
 
       if (payload.couponCode && couponResult?.valid) {
         try {

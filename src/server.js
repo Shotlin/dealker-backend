@@ -8,6 +8,7 @@ import { refreshRazorpayClient } from './config/razorpay.js'
 import { ShiprocketOrdersService } from './modules/shiprocket/shiprocket.orders.service.js'
 import { startCampaignScheduler, stopCampaignScheduler } from './workers/campaign-scheduler.worker.js'
 import { startPaymentExpiryWorker, stopPaymentExpiryWorker } from './workers/payment-expiry.worker.js'
+import { startAbandonedCartWorker, stopAbandonedCartWorker } from './workers/abandoned-cart.worker.js'
 import {
   startWalletTopupReconciliationWorker,
   stopWalletTopupReconciliationWorker,
@@ -70,6 +71,9 @@ const start = async () => {
     // Start payment expiry worker (cleans up abandoned 15-min payment windows)
     startPaymentExpiryWorker()
 
+    // Start abandoned-cart sweep (detects idle carts; pushes live updates to the dashboard)
+    startAbandonedCartWorker(app)
+
     // Start wallet top-up reconciliation worker (catches payments Razorpay
     // captured but the app never confirmed back to us)
     startWalletTopupReconciliationWorker()
@@ -88,6 +92,9 @@ const start = async () => {
 
       // Stop payment expiry worker
       stopPaymentExpiryWorker()
+
+      // Stop abandoned-cart sweep
+      stopAbandonedCartWorker()
 
       // Stop wallet top-up reconciliation worker
       stopWalletTopupReconciliationWorker()

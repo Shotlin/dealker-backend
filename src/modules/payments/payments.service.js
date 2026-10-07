@@ -397,6 +397,8 @@ export class PaymentsService {
       const cartRepo = new CartRepository()
       await cartRepo.clearCart(userId)
       await cartRepo.clearExtras(userId)
+      const { markCartConverted } = await import('../abandoned-carts/abandoned-carts.hooks.js')
+      await markCartConverted({ userId, orderId: order.id, fastify: this.fastify })
     } catch (err) {
       logger.warn({ err: err.message, userId }, 'Cart clear after payment finalize failed (non-critical)')
     }

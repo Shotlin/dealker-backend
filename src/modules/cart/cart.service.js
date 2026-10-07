@@ -2,6 +2,8 @@ import { logger } from '../../config/logger.js'
 import { query } from '../../config/database.js'
 import { AllocationService } from '../allocation/allocation.service.js'
 import { AllocationRepository } from '../allocation/allocation.repository.js'
+import { AbandonedCartsRepository } from '../abandoned-carts/abandoned-carts.repository.js'
+import { markCartCleared } from '../abandoned-carts/abandoned-carts.hooks.js'
 
 /**
  * Multi-vendor cart service.
@@ -38,6 +40,8 @@ export class CartService {
     // CartService with no fastify, so recovery-flip socket emits are
     // skipped there; the DB state still updates correctly either way.
     this.fastify = deps.fastify || null
+    this.abandonedCartsRepo =
+      deps.abandonedCartsRepository || new AbandonedCartsRepository()
   }
 
   /**
@@ -48,9 +52,22 @@ export class CartService {
    * here must never surface to the customer — this is a side effect of
    * shopping, not part of the cart mutation contract.
    */
-  /** Abandoned-cart recovery flips removed with the grocery module. */
   async _maybeMarkRecovered(userId) {
-    void userId
+    try {
+      const row = await this.abandonedCartsRepo.markRecoveredByUserId(userId)
+      if (row && this.fastify?.emitAbandonedCartUpdate) {
+        this.fastify.emitAbandonedCartUpdate({
+          userId,
+          abandonedCartId: row.id,
+          status: 'RECOVERED',
+        })
+      }
+    } catch (err) {
+      logger.warn(
+        { userId, err: err.message },
+        'Abandoned-cart recovery flip failed (non-critical)'
+      )
+    }
   }
 
   // ────────────────────────────────────────────────────────
@@ -570,6 +587,7 @@ export class CartService {
     const mode = normalizePriceMode(priceMode)
     await this.repo.clearCart(userId, mode)
     await this.repo.clearExtras(userId, mode)
+    await markCartCleared({ userId, fastify: this.fastify })
   }
 
   // ────────────────────────────────────────────────────────
