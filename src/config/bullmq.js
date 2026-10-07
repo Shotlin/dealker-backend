@@ -153,6 +153,23 @@ export const stockNotificationsQueue = new Queue('stock-notifications', {
 })
 
 /**
+ * Auctions queue — drives auction time: start due auctions, close ended ones
+ * (every few seconds, so close latency is bounded), and a slower beat for
+ * payment deadlines, second-chance offers and reminders. Concurrency 1: the
+ * handlers lock auction rows anyway, and serial execution keeps ordering simple.
+ * Jobs are idempotent (state is re-checked under a row lock), so retries are safe.
+ */
+export const auctionsQueue = new Queue('auctions', {
+  connection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: { type: 'fixed', delay: 2000 },
+    removeOnComplete: { age: 3600, count: 200 },
+    removeOnFail: { age: 7 * 24 * 3600 },
+  },
+})
+
+/**
  * Scheduled orders queue — fires customer scheduled orders at their
  * scheduled_for time (Requirements 10.2, 10.3, 10.5; task 10.3 worker).
  *
@@ -543,6 +560,22 @@ export function startAddressPurgeWorker(processor) {
   return worker
 }
 
+
+/**
+ * Start auctions worker — see `auctionsQueue`.
+ */
+export function startAuctionWorker(processor) {
+  const worker = new Worker('auctions', processor, { connection, concurrency: 1 })
+
+  worker.on('failed', (job, err) => {
+    logger.error({ jobId: job?.id, name: job?.name, err: err.message, action: 'auction_job_failed' }, 'Auction job failed')
+  })
+
+  workers.push(worker)
+  logger.info('Auction worker started')
+  return worker
+}
+
 /**
  * Close all queues and workers (graceful shutdown)
  */
@@ -561,5 +594,6 @@ export async function closeBullMQ() {
   await stockNotificationsQueue.close()
   await reportPrecomputeQueue.close()
   await addressPurgeQueue.close()
+  await auctionsQueue.close()
   logger.info('BullMQ queues and workers closed')
 }

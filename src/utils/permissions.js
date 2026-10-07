@@ -171,6 +171,11 @@ const CANONICAL_PERMISSION_LIST = Object.freeze([
   'returns.view',
   'returns.manage',
   'vendor_profile.manage',
+  // ── Auctions ───────────────────────────────────────────────────────────
+  'auctions.view',
+  'auctions.manage',
+  'auctions.moderate',
+  'auctions.settings',
 ])
 
 /**
@@ -426,7 +431,7 @@ export const ROLE_PERMISSIONS = Object.freeze({
   SUPPORT_AGENT: Object.freeze(new Set(PERMISSION_GROUPS.CUSTOMER_SUPPORT.concat(['shop_orders.view', 'shops.view']))),
   FINANCE_USER: HQ_ROLE_PERMISSIONS.HQ_FINANCE,
   CONTENT_MANAGER: Object.freeze(new Set(PERMISSION_GROUPS.CATALOGUE_PROPOSALS.concat(['shop_products.approve', 'shop_products.bulk_update', 'shops.view']))),
-  MARKETING_USER: Object.freeze(new Set(PERMISSION_GROUPS.MARKETING_LOYALTY.concat(['reports.global_view']))),
+  MARKETING_USER: Object.freeze(new Set(PERMISSION_GROUPS.MARKETING_LOYALTY.concat(['reports.global_view', 'auctions.view', 'auctions.manage']))),
   READ_ONLY_ANALYST: Object.freeze(new Set(ALL_PERMISSIONS.filter((p) => p.endsWith('.view') || p.endsWith('.global_view') || p.endsWith('.export')))),
   VENDOR_OWNER: Object.freeze(new Set(PERMISSION_GROUPS.VENDORS.concat(PERMISSION_GROUPS.CATALOGUE_PROPOSALS, PERMISSION_GROUPS.PROCUREMENT, ['shop_products.create', 'shop_products.update', 'shop_orders.view']))),
   VENDOR_OPERATOR: Object.freeze(new Set(['product_proposals.create', 'product_proposals.update', 'procurement.respond', 'procurement.view', 'supply_batches.view', 'supply_batches.create', 'supply_batches.update', 'batch_evidence.upload', 'shop_products.view', 'shop_orders.view'])),

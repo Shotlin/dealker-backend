@@ -4,6 +4,7 @@ import {
   settlementQueue,
   payoutQueue,
   addressPurgeQueue,
+  auctionsQueue,
   closeBullMQ,
   startNotificationWorker,
   startOrderWorker,
@@ -12,10 +13,10 @@ import {
   startAllocationWorker,
   startSettlementWorker,
   startPayoutWorker,
-  startScheduledOrderWorker,
   startStockNotificationsWorker,
   startReportPrecomputeWorker,
   startAddressPurgeWorker,
+  startAuctionWorker,
 } from '../config/bullmq.js'
 
 export async function startWorkerRuntime() {
@@ -39,10 +40,6 @@ export async function startWorkerRuntime() {
     '../workers/payout.worker.js'
   )
 
-  const { createScheduledOrderProcessor } = await import(
-    '../workers/scheduled-orders.worker.js'
-  )
-
   const { createStockNotificationsProcessor } = await import(
     '../workers/stock-notifications.worker.js'
   )
@@ -53,6 +50,10 @@ export async function startWorkerRuntime() {
 
   const { createAddressPurgeProcessor, scheduleAddressPurgeCron } = await import(
     '../workers/address-purge.worker.js'
+  )
+
+  const { createAuctionProcessor, scheduleAuctionBeats } = await import(
+    '../workers/auction.worker.js'
   )
 
   const { startEventLoopMonitor } = await import(
@@ -68,10 +69,8 @@ export async function startWorkerRuntime() {
     createSettlementProcessor({ queue: settlementQueue })
   )
   startPayoutWorker(createPayoutProcessor({ queue: payoutQueue }))
-  // Scheduled-orders worker (task 10.3) — fires customer scheduled orders
-  // at their scheduled_for time, places real orders, marks FAILED on
-  // stock issues, and creates the next recurrence row when applicable.
-  startScheduledOrderWorker(createScheduledOrderProcessor())
+  // (Scheduled-orders worker removed with the quick-commerce module strip —
+  // its worker file no longer exists, and importing it crashed the whole runtime.)
   // Stock-notifications worker (task 13.2) — fans out restock push +
   // in-app notifications to every customer who wishlisted a product
   // when its Shop_Product transitions from stock 0 → positive
@@ -83,6 +82,9 @@ export async function startWorkerRuntime() {
   // Address-purge worker — daily job that hard-deletes soft-deleted
   // addresses once their security/audit retention window has elapsed.
   startAddressPurgeWorker(createAddressPurgeProcessor())
+
+  // Auction worker — starts/closes auctions on time, sweeps payment deadlines.
+  startAuctionWorker(createAuctionProcessor())
 
   // Event-loop blocking detector (task 13.6) — logs warning when
   // the event loop is blocked for >100ms.
@@ -104,6 +106,12 @@ export async function startWorkerRuntime() {
       { err: err.message },
       'Payout weekly cron registration failed'
     )
+  }
+
+  try {
+    await scheduleAuctionBeats(auctionsQueue)
+  } catch (err) {
+    logger.warn({ err: err.message }, 'Auction beat registration failed')
   }
 
   try {

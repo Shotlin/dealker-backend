@@ -240,6 +240,25 @@ async function socketioPlugin(fastify) {
       }
     })
 
+    // ─── AUCTIONS ─────────────────────────────────────
+    // The auction room carries PUBLIC state only (price, masked bidders, end time) — never the
+    // private max bid — so any authenticated user may watch. Joining is limited to real auctions.
+    socket.on('auction:join', async (auctionId) => {
+      if (typeof auctionId !== 'string' || !/^[0-9a-f-]{36}$/i.test(auctionId)) return
+      try {
+        const { rows } = await query(
+          `SELECT 1 FROM auctions WHERE id = $1 AND status NOT IN ('DRAFT','PENDING_APPROVAL','REJECTED') LIMIT 1`,
+          [auctionId]
+        )
+        if (rows.length > 0) socket.join(`auction:${auctionId}`)
+      } catch (err) {
+        logger.error({ err, userId, auctionId }, 'Auction room join failed')
+      }
+    })
+    socket.on('auction:leave', (auctionId) => {
+      if (typeof auctionId === 'string') socket.leave(`auction:${auctionId}`)
+    })
+
     // ─── ADMIN EVENTS ────────────────────────────────
     if (role === 'ADMIN') {
       socket.join('admin:dashboard')

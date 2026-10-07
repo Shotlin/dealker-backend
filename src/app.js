@@ -475,6 +475,13 @@ export const buildApp = async () => {
     prefix: "/api/v1/admin/referrals",
   });
 
+  // Auctions — paid-registration ascending auctions (customer API + admin/vendor management)
+  const { auctionsRoutes, auctionManageRoutes } = await import(
+    "./modules/auctions/auctions.routes.js"
+  );
+  await app.register(auctionsRoutes, { prefix: "/api/v1/auctions" });
+  await app.register(auctionManageRoutes, { prefix: "/api/v1/manage/auctions" });
+
   // Shipping — normalized provider interface (Shiprocket / Blue Dart / Porter),
   // rules-based carrier selection, shipment tracking + webhooks
   const { shippingRoutes } = await import(
