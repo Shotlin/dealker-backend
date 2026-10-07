@@ -1,0 +1,2 @@
+ALTER TABLE theme_tabs
+  ADD COLUMN IF NOT EXISTS text_color VARCHAR(7);

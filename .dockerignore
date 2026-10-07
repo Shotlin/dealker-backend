@@ -1,0 +1,16 @@
+node_modules
+npm-debug.log
+.git
+.github
+.vscode
+.env
+.env.*
+docker-compose*.yml
+deploy
+deploy/production/app.env
+deploy/production/infra.env
+test-results
+coverage
+logs
+tmp
+*.md

@@ -1,0 +1,61 @@
+-- 047_users_session_version.sql
+-- Multi-vendor: extend `users` with `session_version` — the per-User
+-- monotonic counter that backs **global session revocation on password
+-- change** (R20 AC#8, design §5.5).
+--
+-- The flow this column enables (design §5.5, tasks 3.5 + 3.7):
+--   * At access-token issuance time the auth service stamps the current
+--     `users.session_version` value into the JWT payload (HQ JWT,
+--     shop-scoped JWT, and the 5-minute interim multi-shop JWT all
+--     carry the field — design §5.5 token shapes).
+--   * On every authenticated request the auth plugin re-reads the row
+--     value (`SELECT session_version FROM users WHERE id = $1`, served
+--     from the per-request user cache) and compares it to the JWT's
+--     `session_version`. A mismatch returns HTTP 401 with the error
+--     code SESSION_INVALID and short-circuits the request before the
+--     route handler runs (task 3.7).
+--   * `POST /api/v1/admin/auth/change-password` succeeds the bcrypt
+--     re-hash, clears `force_password_change`, and **increments
+--     `session_version`** in the same transaction (task 3.5). All
+--     previously issued JWTs for that User immediately fail the
+--     equality check on their next request — every other open
+--     session, on every device, becomes invalid the moment the row is
+--     bumped. The change-password handler then issues a fresh 24h JWT
+--     stamped with the new `session_version` so the caller stays
+--     logged in (R20 AC#8, design §5.5).
+--
+-- Column choice (per design §5.5):
+--   * `session_version INTEGER NOT NULL DEFAULT 1`. INTEGER (4 bytes,
+--     PG range −2^31..2^31−1) is enormous headroom for a value that is
+--     bumped at most once per password change per User — overflow is
+--     not a practical concern. NOT NULL keeps the equality check on
+--     the auth-plugin hot path branch-free (no `IS NULL` guard
+--     required). DEFAULT 1 — not 0 — fills every existing row on
+--     migrate so previously issued tokens for those Users either
+--     already encode `session_version: 1` (new-issue path) or were
+--     issued before this column existed and will be rejected with
+--     SESSION_INVALID at next request, forcing the User through
+--     re-login. That is the desired behaviour: a forced re-issuance
+--     window aligned with the rollout of this feature.
+--
+-- Idempotent: re-running this migration is a no-op. PostgreSQL's
+-- `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` skips the statement
+-- entirely on the second run, and the `NOT NULL DEFAULT 1` clause is
+-- legal on `ADD COLUMN` because the DEFAULT is supplied — PG fills
+-- existing rows with the default value before applying the NOT NULL
+-- constraint, so no two-step "add nullable → backfill → set NOT NULL"
+-- dance is required (PG ≥ 11 fast-paths this as a metadata-only change
+-- without a table rewrite).
+--
+-- Note: this migration only ships the schema. The token-issuance
+-- stamping (task 3.4 + login flows in design §5.4), the
+-- change-password increment (task 3.5), and the auth-plugin equality
+-- check + 401 SESSION_INVALID short-circuit (task 3.7) live in
+-- subsequent tasks. No application code reads or writes this column
+-- yet — until task 3.5 ships, the column is dormant and every JWT
+-- continues to validate as before.
+--
+-- Requirements: R20.8
+-- Design:       §5.5 of .kiro/specs/multi-vendor-system/design.md
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 1;

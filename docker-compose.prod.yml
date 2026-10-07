@@ -1,0 +1,176 @@
+x-backend-service: &backend-service
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  env_file:
+    - ./deploy/production/app.env
+  environment:
+    NODE_ENV: production
+    HOST: 0.0.0.0
+    PORT: 3000
+    LOG_PRETTY: "false"
+    ENABLE_SWAGGER: "false"
+    DB_HOST: postgres
+    DB_PORT: 5432
+    REDIS_HOST: redis
+    REDIS_PORT: 6379
+    BULL_REDIS_HOST: redis
+    BULL_REDIS_PORT: 6379
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - backend
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in deploy/production/infra.env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in deploy/production/infra.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/production/infra.env}
+    volumes:
+      - ${POSTGRES_DATA_DIR:-/srv/bakaloo/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in deploy/production/infra.env}
+    command:
+      - sh
+      - -ec
+      - exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"
+    volumes:
+      - ${REDIS_DATA_DIR:-/srv/bakaloo/redis}:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+  migrate:
+    <<: *backend-service
+    restart: "no"
+    command: ["npm", "run", "db:migrate"]
+    profiles:
+      - ops
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend-service
+    command: ["npm", "run", "start:api"]
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health/ready >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    <<: *backend-service
+    command: ["npm", "run", "start:worker"]
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      LOG_PRETTY: "false"
+      ENABLE_SWAGGER: "false"
+      DB_HOST: postgres
+      DB_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      BULL_REDIS_HOST: redis
+      BULL_REDIS_PORT: 6379
+      WORKER_HEARTBEAT_FILE: /tmp/bakaloo-worker-heartbeat
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "const fs=require('fs');const p=process.env.WORKER_HEARTBEAT_FILE||'/tmp/bakaloo-worker-heartbeat';const age=Date.now()-fs.statSync(p).mtimeMs;process.exit(age < 90000 ? 0 : 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./deploy/production/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    expose:
+      - "8080"
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health/ready >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  cloudflared:
+    image: cloudflare/cloudflared:2024.8.3
+    restart: unless-stopped
+    profiles:
+      - ops
+    depends_on:
+      nginx:
+        condition: service_healthy
+    command: tunnel --config /etc/cloudflared/config.yml --no-autoupdate run
+    volumes:
+      - ./deploy/production/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - ./deploy/production/cloudflared/credentials.json:/etc/cloudflared/credentials.json:ro
+    networks:
+      - backend
+
+  postgres-backup:
+    build:
+      context: ./deploy/production/postgres-backup
+    profiles:
+      - ops
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Kolkata}
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-grocery_db}
+      PGUSER: ${POSTGRES_USER:-grocery_user}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-disabled}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-ap-south-1}
+      BACKUP_DIR: /backups
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-disabled}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-postgres}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 */6 * * *}
+    volumes:
+      - ${BACKUP_DIR:-/srv/bakaloo/backups}:/backups
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge

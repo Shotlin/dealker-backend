@@ -1,0 +1,33 @@
+-- 088_coupon_free_delivery_toggle.sql
+--
+-- Two things:
+--
+-- 1. `grants_free_delivery` — an independent free-delivery flag any coupon
+--    can carry, regardless of its discount_type. Until now, free delivery
+--    only ever came from discount_type='FREE_DELIVERY' (069), which forces
+--    a coupon to be EITHER a real discount OR free delivery, never both.
+--    This lets an admin build e.g. "10% off + free delivery" on one
+--    PERCENTAGE coupon, or "free delivery once you spend ₹51 on Dairy"
+--    without inventing a fake discount value. Fully additive/backward
+--    compatible: existing FREE_DELIVERY-type coupons keep working exactly
+--    as before (coupons.service.js#validate ORs this new column with
+--    discount_type='FREE_DELIVERY' when deciding the freeDelivery flag).
+--
+-- 2. Category/product coupon scoping (applicable_category_ids /
+--    applicable_product_ids, added back in 044) already exists in the
+--    schema and already has a full distribution algorithm in
+--    coupons.service.js, but was never actually wired into the live
+--    checkout path (orders.service.js only ever called validate(),
+--    which ignored those columns entirely) — no schema change needed for
+--    that, only application-code enforcement (see coupons.service.js /
+--    coupons.repository.js#resolveMatchingProductIds). Category BUNDLEs
+--    (category_type='BUNDLE', see 066) are just rows in `categories` with
+--    their real membership in category_products rather than
+--    products.category_id, so a bundle can already be targeted by putting
+--    its id in applicable_category_ids — resolveMatchingProductIds checks
+--    both products.category_id and category_products so bundles, ordinary
+--    categories, and subcategories (parent_id is just a categories column,
+--    no special-casing needed) all work through the same array.
+
+ALTER TABLE coupons
+  ADD COLUMN IF NOT EXISTS grants_free_delivery BOOLEAN NOT NULL DEFAULT false;

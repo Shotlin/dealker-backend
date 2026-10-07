@@ -1,0 +1,9 @@
+tunnel: replace_with_tunnel_uuid
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: bakaloo.shotlin.in
+    service: http://nginx:8080
+  - hostname: grocery-api.shotlin.in
+    service: http://nginx:8080
+  - service: http_status:404
