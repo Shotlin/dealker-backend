@@ -47,10 +47,16 @@ Rollback: `docker tag dealker-api:rollback-pre-<sha> dealker-api:latest` (same f
 - Dashboard (hosted elsewhere, not on this server): https://dash.dealker.agnixstudio.in. `FRONTEND_URL`/`ADMIN_URL` point to it. `CORS_ORIGINS` = dash/apex/www/api `.dealker.agnixstudio.in` + localhost dev ports (3000-3002, 4501, 5173). Not wildcard on purpose: CORS uses `credentials: true`. To add an origin: edit `CORS_ORIGINS` in `app.env`, then `docker compose ... up -d --force-recreate api worker && ... restart nginx`. Code also always allows *.bakaloo.in, *.shotlin.in, *.vercel.app.
 - No automated DB backups beyond the pre-deploy dump.
 
-## Patches applied on every deploy (`/opt/dealker/patches/*.patch`)
-Local commits not yet on GitHub are shipped as patches; `deploy.sh` resets + cleans the checkout, then applies each one (and skips any that are already upstream).
-- `feature-abandoned-carts.patch` — commit `1561b2e` "feat: abandoned cart recovery" (local only). **Once you push that commit to GitHub, delete this patch file on the server.**
-- `fix-remove-scheduled-orders-worker.patch` — see below.
+## Patches
+`/opt/dealker/patches/*.patch` is a hook for temporary local fixes: `deploy.sh` applies each one after pulling and skips any that are already upstream or no longer apply. **Currently empty** — the abandoned-cart feature and the worker fix are both on GitHub `main` now.
+
+## Deploy in two commands
+```bash
+ssh -i ~/Downloads/dealker-backend.pem ubuntu@ec2-13-201-85-54.ap-south-1.compute.amazonaws.com   # 1) log in
+/opt/dealker/deploy.sh                                                                               # 2) deploy (run on the server)
+```
+Or as one line from your Mac: `ssh -i ~/Downloads/dealker-backend.pem ubuntu@ec2-13-201-85-54.ap-south-1.compute.amazonaws.com '/opt/dealker/deploy.sh'`.
+Ends with `=== DEPLOY OK ===` (exit 0) or `=== DEPLOY FAILED ===` (exit 1).
 
 ## Abandoned carts
 - Sweep worker runs inside the **api** container (needs the socket server for live dashboard updates). A cart idle longer than `ABANDONED_CART_THRESHOLD_MINUTES` is recorded as an episode. **Demo server uses 2** (default in code: 30) — set in `app.env`.
@@ -60,10 +66,10 @@ Local commits not yet on GitHub are shipped as patches; `deploy.sh` resets + cle
 - Demo data: `docker compose ... exec -T api node scripts/seed-abandoned-carts-demo.mjs` (idempotent; marker = coupons `DEMOCB*`). Seeded 2026-10-07.
 
 ## Known repo issues
-- `src/runtime/workers.js` imports `src/workers/scheduled-orders.worker.js`, which does not exist in the repo (whole `scheduled-orders` module is gone) → worker crash-looped. Patched by `patches/fix-remove-scheduled-orders-worker.patch` (also in repo working copy at `deploy/production/`). Once fixed upstream the script detects it and skips the patch; then delete the patch file.
 - `CLOUD.md`, `routine-deploy.sh`, `redeploy-from-local.sh` in the repo describe a different (FreshCuts) server — don't use them for this one.
 
 ## Change log
+- 2026-10-07: GitHub main moved to ddc0647 (includes abandoned carts + worker fix + migration 172_auctions). deploy.sh hardened (waits for every container healthy, public HTTPS check, non-zero exit on failure, stale patches only warn). Both patches removed.
 - 2026-10-07: Deployed abandoned-cart feature (backend patch), seeded demo episodes (7 open), set threshold to 2 min. Verified over HTTPS: summary/list APIs 200; a real demo-customer cart was auto-detected ~2 min after last activity. deploy.sh now also runs `git clean -fdq`.
 - 2026-10-07: Restored local demo DB (pg_dump of local dealker-postgres-1: 131 products, 260 orders, 14 vendors, 5 admins, 49 customers) over the empty server DB. Pre-restore backup: /srv/dealker/backups/pre-demo-restore.dump. Admin logins verified (200). Demo admin emails: superadmin@/demo@/riya@/karan@/neha@dealker.local (passwords in local docker-compose.yml / seed scripts). Re-sync demo data = repeat dump/restore.
 - 2026-10-07: Added dashboard domain dash.dealker.agnixstudio.in to CORS_ORIGINS/FRONTEND_URL/ADMIN_URL; api+worker recreated. Verified preflight OK for it, blocked for unknown origins.

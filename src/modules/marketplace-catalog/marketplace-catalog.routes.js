@@ -5,18 +5,25 @@
  */
 
 import { MarketplaceCatalogService } from './marketplace-catalog.service.js'
+import { injectSponsored } from '../ads/ads-serving.service.js'
 
 const service = new MarketplaceCatalogService()
 
 /** Public routes — mounted at /api/v1/discovery */
 export const publicDiscoveryRoutes = async function discoveryRoutes(fastify) {
   fastify.get('/search', {
+    // Identify the shopper when a token is sent (ad impressions carry the user for click de-duplication);
+    // anonymous browsing stays fully allowed.
+    preHandler: async (request) => {
+      try { await request.jwtVerify() } catch { /* anonymous */ }
+    },
     handler: async (request) => {
       const {
         q = '', pincode = '', lat, lng, categoryId, brand,
         minPrice, maxPrice, minRating, condition, owner, inStock, sort, page = 1, limit = 24,
       } = request.query || {}
-      return service.search({
+      const filtered = [brand, minPrice, maxPrice, minRating, condition, owner].some((v) => v != null && v !== '')
+      const result = await service.search({
         q: String(q || ''), pincode: String(pincode || ''),
         lat: lat != null ? Number(lat) : null,
         lng: lng != null ? Number(lng) : null,
@@ -28,6 +35,13 @@ export const publicDiscoveryRoutes = async function discoveryRoutes(fastify) {
         inStockOnly: inStock !== 'false',
         sort: String(sort || 'relevance'),
         page: Number(page), limit: Math.min(60, Number(limit)),
+      })
+      // Sponsored placements ride on relevance-sorted, unfiltered results only (a price/brand filter
+      // would otherwise be violated by a paid slot). Ads never break search: failures return `result`.
+      if (filtered || (sort && sort !== 'relevance') || inStock === 'false') return result
+      return injectSponsored(result, {
+        q: String(q || ''), categoryId: categoryId || null, pincode: String(pincode || ''),
+        userId: request.user?.id || null, page: Math.max(1, Number(page) || 1),
       })
     },
   })

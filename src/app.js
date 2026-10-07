@@ -482,6 +482,13 @@ export const buildApp = async () => {
   await app.register(auctionsRoutes, { prefix: "/api/v1/auctions" });
   await app.register(auctionManageRoutes, { prefix: "/api/v1/manage/auctions" });
 
+  // Sponsored ads — pay-per-click product promotion (shopper click billing + admin/vendor management)
+  const { adsPublicRoutes, adsManageRoutes } = await import(
+    "./modules/ads/ads.routes.js"
+  );
+  await app.register(adsPublicRoutes, { prefix: "/api/v1/ads" });
+  await app.register(adsManageRoutes, { prefix: "/api/v1/manage/ads" });
+
   // Shipping — normalized provider interface (Shiprocket / Blue Dart / Porter),
   // rules-based carrier selection, shipment tracking + webhooks
   const { shippingRoutes } = await import(
