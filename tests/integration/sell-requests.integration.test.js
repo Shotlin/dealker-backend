@@ -14,9 +14,14 @@ d('sell requests (real database)', () => {
   let q, pool, svc
   const F = {}
   const rand = () => String(Math.floor(Math.random() * 1e9)).padStart(9, '0')
-  const admin = () => ({ kind: 'ADMIN', userId: F.adminId, vendorId: null })
-  const vendorA = () => ({ kind: 'VENDOR', userId: F.vUserA, vendorId: F.vendorA })
-  const vendorB = () => ({ kind: 'VENDOR', userId: F.vUserB, vendorId: F.vendorB })
+  const admin = () => ({ kind: 'ADMIN', scopeKind: 'SELL', userId: F.adminId, vendorId: null })
+  const vendorA = () => ({ kind: 'VENDOR', scopeKind: 'SELL', userId: F.vUserA, vendorId: F.vendorA })
+  const vendorB = () => ({ kind: 'VENDOR', scopeKind: 'SELL', userId: F.vUserB, vendorId: F.vendorB })
+  // the Exchange section
+  const adminX = () => ({ ...admin(), scopeKind: 'EXCHANGE' })
+  const vendorAX = () => ({ ...vendorA(), scopeKind: 'EXCHANGE' })
+  const custS = (userId = F.cust) => ({ kind: 'CUSTOMER', scopeKind: 'SELL', userId })
+  const custX = (userId = F.cust) => ({ kind: 'CUSTOMER', scopeKind: 'EXCHANGE', userId })
 
   const qa = { ageMonths: 12, screenScratches: 'NONE', bodyDents: false, screenReplaced: false, skinReplaced: false, billAvailable: true, boxAvailable: true, chargerAvailable: true, batteryHealth: 90, powersOn: true }
   let imeiSeq = 0
@@ -76,13 +81,13 @@ d('sell requests (real database)', () => {
   })
 
   it('customer creates under their own account and only sees their own requests', async () => {
-    const r = await svc.createRequest({ kind: 'CUSTOMER', userId: F.cust }, input({ customer: { name: 'Hacker', phone: '+91 0000000000' } }))
+    const r = await svc.createRequest(custS(), input({ customer: { name: 'Hacker', phone: '+91 0000000000' } }))
     expect(r.customer.name).toBe('Rohit Kumar') // identity comes from the account, not the body
     const other = await mkUser('Other')
-    await expect(svc.getMine(other, r.id)).rejects.toMatchObject({ statusCode: 404 })
-    expect((await svc.getMine(F.cust, r.id)).id).toBe(r.id)
-    expect((await svc.mine(F.cust)).data.total).toBeGreaterThanOrEqual(1)
-    await expect(svc.cancel({ kind: 'CUSTOMER', userId: other }, r.id)).rejects.toMatchObject({ statusCode: 404 })
+    await expect(svc.getMine(other, r.id, 'SELL')).rejects.toMatchObject({ statusCode: 404 })
+    expect((await svc.getMine(F.cust, r.id, 'SELL')).id).toBe(r.id)
+    expect((await svc.mine(F.cust, 'SELL')).data.total).toBeGreaterThanOrEqual(1)
+    await expect(svc.cancel(custS(other), r.id)).rejects.toMatchObject({ statusCode: 404 })
   })
 
   it('only accepts images from our own upload endpoint', async () => {
@@ -96,10 +101,11 @@ d('sell requests (real database)', () => {
   })
 
   it('exchange computes trade-in and what the customer pays', async () => {
-    const r = await svc.createRequest(admin(), input({ type: 'EXCHANGE', exchange: { newProduct: 'iPhone 15', newProductPrice: 69900 } }))
+    const r = await svc.createRequest(adminX(), input({ type: 'EXCHANGE', exchange: { newProduct: 'iPhone 15', newProductPrice: 69900 } }))
     expect(r.exchange.tradeInValue).toBe(r.quote)
     expect(r.exchange.payable).toBe(69900 - r.quote)
-    await expect(svc.createRequest(admin(), input({ type: 'EXCHANGE' }))).rejects.toMatchObject({ code: 'VALIDATION' })
+    expect(r.code).toMatch(/^EXCH-2\d{5}$/)
+    await expect(svc.createRequest(adminX(), input({ type: 'EXCHANGE' }))).rejects.toMatchObject({ code: 'VALIDATION' })
   })
 
   describe('offers, assignment and approval', () => {
@@ -214,7 +220,7 @@ d('sell requests (real database)', () => {
 
   it('stats reflect the table', async () => {
     const s = await svc.stats(admin())
-    const { rows } = await q(`SELECT COUNT(*)::int n, COUNT(*) FILTER (WHERE status='PENDING')::int p FROM sell_requests`)
+    const { rows } = await q(`SELECT COUNT(*)::int n, COUNT(*) FILTER (WHERE status='PENDING')::int p FROM sell_requests WHERE kind='SELL'`)
     expect(s.total).toBe(rows[0].n)
     expect(s.pending).toBe(rows[0].p)
   })
@@ -246,46 +252,48 @@ d('sell requests (real database)', () => {
       return { id: rows[0].id, num }
     }
     const approvedExchange = async (userId = F.cust) => {
-      const r = await svc.createRequest({ kind: 'CUSTOMER', userId }, input({ type: 'EXCHANGE', exchange: { newProduct: 'iPhone 15', newProductPrice: 70000 } }))
-      await svc.placeOffer(vendorA(), r.id, { amount: 30000 })
-      await svc.assignVendor(admin(), r.id, F.vendorA)
-      await svc.approve(admin(), r.id)
+      const r = await svc.createRequest(custX(userId), input({ type: 'EXCHANGE', exchange: { newProduct: 'iPhone 15', newProductPrice: 70000 } }))
+      await svc.placeOffer(vendorAX(), r.id, { amount: 30000 })
+      await svc.assignVendor(adminX(), r.id, F.vendorA)
+      await svc.approve(adminX(), r.id)
       return r
     }
 
     it('cannot complete an exchange until an order is linked', async () => {
       const r = await approvedExchange()
-      await expect(svc.complete(admin(), r.id)).rejects.toMatchObject({ code: 'EXCHANGE_ORDER_REQUIRED' })
+      await expect(svc.complete(adminX(), r.id)).rejects.toMatchObject({ code: 'EXCHANGE_ORDER_REQUIRED' })
       const o = await mkOrder(F.cust)
-      const linked = await svc.linkOrder(admin(), r.id, o.num)
+      const linked = await svc.linkOrder(adminX(), r.id, o.num)
       expect(linked.exchangeOrder).toMatchObject({ id: o.id, orderNumber: o.num })
       expect(linked.timeline.some((t) => t.label.includes(o.num))).toBe(true)
-      expect((await svc.complete(admin(), r.id)).status).toBe('COMPLETED')
+      expect((await svc.complete(adminX(), r.id)).status).toBe('COMPLETED')
     })
 
     it("refuses another customer's order, a cancelled order, a reused order, and non-exchange requests", async () => {
       const r = await approvedExchange()
       const other = await mkUser('Someone Else')
-      await expect(svc.linkOrder(admin(), r.id, (await mkOrder(other)).num)).rejects.toMatchObject({ code: 'ORDER_MISMATCH' })
-      await expect(svc.linkOrder(admin(), r.id, (await mkOrder(F.cust, 'CANCELLED')).num)).rejects.toMatchObject({ code: 'ORDER_CANCELLED' })
-      await expect(svc.linkOrder(admin(), r.id, 'NOPE-1')).rejects.toMatchObject({ code: 'ORDER_NOT_FOUND' })
+      await expect(svc.linkOrder(adminX(), r.id, (await mkOrder(other)).num)).rejects.toMatchObject({ code: 'ORDER_MISMATCH' })
+      await expect(svc.linkOrder(adminX(), r.id, (await mkOrder(F.cust, 'CANCELLED')).num)).rejects.toMatchObject({ code: 'ORDER_CANCELLED' })
+      await expect(svc.linkOrder(adminX(), r.id, 'NOPE-1')).rejects.toMatchObject({ code: 'ORDER_NOT_FOUND' })
       const o = await mkOrder(F.cust)
-      await svc.linkOrder(admin(), r.id, o.num)
+      await svc.linkOrder(adminX(), r.id, o.num)
       const r2 = await approvedExchange()
-      await expect(svc.linkOrder(admin(), r2.id, o.num)).rejects.toMatchObject({ code: 'ORDER_ALREADY_LINKED' })
+      await expect(svc.linkOrder(adminX(), r2.id, o.num)).rejects.toMatchObject({ code: 'ORDER_ALREADY_LINKED' })
 
       const plain = await svc.createRequest(admin(), input())
-      await expect(svc.linkOrder(admin(), plain.id, o.num)).rejects.toMatchObject({ code: 'INVALID_STATE' })
+      await expect(svc.linkOrder(adminX(), plain.id, o.num)).rejects.toMatchObject({ code: 'NOT_FOUND' }) // sell rows are invisible to the exchange section
     })
 
-    it('requires the exchange to be approved and the customer to have an account', async () => {
-      const pending = await svc.createRequest({ kind: 'CUSTOMER', userId: F.cust }, input({ type: 'EXCHANGE', exchange: { newProduct: 'x', newProductPrice: 70000 } }))
-      await expect(svc.linkOrder(admin(), pending.id, 'whatever')).rejects.toMatchObject({ code: 'INVALID_STATE' })
-      const walkIn = await svc.createRequest(admin(), input({ type: 'EXCHANGE', exchange: { newProduct: 'x', newProductPrice: 70000 } }))
-      await svc.placeOffer(vendorA(), walkIn.id, { amount: 20000 })
-      await svc.assignVendor(admin(), walkIn.id, F.vendorA)
-      await svc.approve(admin(), walkIn.id)
-      await expect(svc.linkOrder(admin(), walkIn.id, 'whatever')).rejects.toMatchObject({ code: 'NO_CUSTOMER_ACCOUNT' })
+    it('links an order while still pending, once only, and needs the customer to have an account', async () => {
+      const pending = await svc.createRequest(custX(), input({ type: 'EXCHANGE', exchange: { newProduct: 'x', newProductPrice: 70000 } }))
+      const o1 = await mkOrder(F.cust)
+      expect((await svc.linkOrder(adminX(), pending.id, o1.num)).exchangeOrder.orderNumber).toBe(o1.num)
+      await expect(svc.linkOrder(adminX(), pending.id, (await mkOrder(F.cust)).num)).rejects.toMatchObject({ code: 'ORDER_ALREADY_LINKED' })
+      const walkIn = await svc.createRequest(adminX(), input({ type: 'EXCHANGE', exchange: { newProduct: 'x', newProductPrice: 70000 } }))
+      await svc.placeOffer(vendorAX(), walkIn.id, { amount: 20000 })
+      await svc.assignVendor(adminX(), walkIn.id, F.vendorA)
+      await svc.approve(adminX(), walkIn.id)
+      await expect(svc.linkOrder(adminX(), walkIn.id, 'whatever')).rejects.toMatchObject({ code: 'NO_CUSTOMER_ACCOUNT' })
     })
   })
 
@@ -303,7 +311,7 @@ d('sell requests (real database)', () => {
       await q(`INSERT INTO vendor_users (vendor_id, user_id, role) VALUES ($1,$2,'VENDOR_OWNER') ON CONFLICT DO NOTHING`, [F.vendorA, vendorUser])
       await q(`INSERT INTO vendor_users (vendor_id, user_id, role) VALUES ($1,$2,'VENDOR_OWNER') ON CONFLICT DO NOTHING`, [F.vendorB, F.vUserB])
 
-      const r = await svc.createRequest({ kind: 'CUSTOMER', userId: F.cust }, input())
+      const r = await svc.createRequest(custS(), input())
       const newForVendor = await waitFor(async () => (await notesFor(vendorUser, 'sell_request:submitted')).find((n) => n.data.requestId === r.id))
       expect(newForVendor).toBeTruthy()
       expect(JSON.stringify(newForVendor)).not.toMatch(/Rohit|9\d{9}/)
@@ -329,10 +337,117 @@ d('sell requests (real database)', () => {
     })
 
     it('a customer who cancels is not notified of their own action', async () => {
-      const r = await svc.createRequest({ kind: 'CUSTOMER', userId: F.cust }, input())
-      await svc.cancel({ kind: 'CUSTOMER', userId: F.cust }, r.id)
+      const r = await svc.createRequest(custS(), input())
+      await svc.cancel(custS(), r.id)
       await new Promise((r2) => setTimeout(r2, 400))
       expect((await notesFor(F.cust, 'sell_request:cancelled')).filter((n) => n.data.requestId === r.id)).toHaveLength(0)
+    })
+  })
+
+  describe('Sell and Exchange are separate sections', () => {
+    let sell, exch
+    const mkOrder2 = async (userId) => {
+      const num = `T-${rand()}`
+      const { rows } = await q(`INSERT INTO orders (order_number, customer_id, items, subtotal, total_payable, delivery_address) VALUES ($1,$2,'[]',100,100,'{}') RETURNING id`, [num, userId])
+      return { id: rows[0].id, num }
+    }
+    const exchangeInput = (over = {}) => input({ type: 'EXCHANGE', exchange: { newProduct: 'Galaxy S24', newProductPrice: 80000 }, ...over })
+
+    beforeAll(async () => {
+      sell = await svc.createRequest(admin(), input())
+      exch = await svc.createRequest(adminX(), exchangeInput())
+    })
+
+    it('uses separate number ranges', () => {
+      expect(sell.code).toMatch(/^SELL-1\d{5}$/)
+      expect(exch.code).toMatch(/^EXCH-2\d{5}$/)
+      expect(sell.kind).toBe('SELL')
+      expect(exch.kind).toBe('EXCHANGE')
+    })
+
+    it('refuses to create the wrong kind in each section', async () => {
+      await expect(svc.createRequest(admin(), exchangeInput())).rejects.toMatchObject({ code: 'WRONG_SECTION' })
+      await expect(svc.createRequest(adminX(), input())).rejects.toMatchObject({ code: 'WRONG_SECTION' })
+      await expect(svc.createRequest(custX(), input({ type: 'BUY_NOW' }))).rejects.toMatchObject({ code: 'WRONG_SECTION' })
+    })
+
+    it('never shows one section’s rows in the other (list, count, get, stats)', async () => {
+      const sellList = (await svc.listManage(admin(), { limit: 100 })).data
+      const exList = (await svc.listManage(adminX(), { limit: 100 })).data
+      expect(sellList.items.every((i) => i.kind === 'SELL' && i.type !== 'EXCHANGE')).toBe(true)
+      expect(exList.items.every((i) => i.kind === 'EXCHANGE' && i.type === 'EXCHANGE')).toBe(true)
+      expect(sellList.items.map((i) => i.id)).not.toContain(exch.id)
+      expect(exList.items.map((i) => i.id)).not.toContain(sell.id)
+      const dbSell = (await q(`SELECT COUNT(*)::int n FROM sell_requests WHERE kind='SELL'`)).rows[0].n
+      const dbEx = (await q(`SELECT COUNT(*)::int n FROM sell_requests WHERE kind='EXCHANGE'`)).rows[0].n
+      expect(sellList.total).toBe(dbSell)
+      expect(exList.total).toBe(dbEx)
+      // searching by the other section's code or IMEI finds nothing
+      expect((await svc.listManage(admin(), { q: exch.code })).data.total).toBe(0)
+      expect((await svc.listManage(adminX(), { q: sell.device.imei })).data.total).toBe(0)
+
+      await expect(svc.getManage(admin(), exch.id)).rejects.toMatchObject({ statusCode: 404 })
+      await expect(svc.getManage(adminX(), sell.id)).rejects.toMatchObject({ statusCode: 404 })
+
+      const sStats = await svc.stats(admin())
+      const xStats = await svc.stats(adminX())
+      expect(sStats.total).toBe(dbSell)
+      expect(xStats.total).toBe(dbEx)
+      expect(xStats.awaitingOrder).toBeGreaterThanOrEqual(1)
+      expect(sStats.awaitingOrder).toBeUndefined()
+    })
+
+    it('every action is blocked across sections', async () => {
+      for (const fn of [
+        () => svc.approve(adminX(), sell.id),
+        () => svc.reject(adminX(), sell.id, 'x'),
+        () => svc.cancel(adminX(), sell.id),
+        () => svc.requestInfo(adminX(), sell.id, 'x'),
+        () => svc.assignVendor(adminX(), sell.id, F.vendorA),
+        () => svc.complete(adminX(), sell.id),
+        () => svc.placeOffer(vendorAX(), sell.id, { amount: 1000 }),
+        () => svc.approve(admin(), exch.id),
+        () => svc.reject(admin(), exch.id, 'x'),
+        () => svc.cancel(admin(), exch.id),
+        () => svc.placeOffer(vendorA(), exch.id, { amount: 1000 }),
+        () => svc.linkOrder(admin(), exch.id, 'x'),
+      ]) await expect(fn()).rejects.toMatchObject({ statusCode: 404 })
+      // …and nothing changed
+      expect((await svc.getManage(admin(), sell.id)).status).toBe('PENDING')
+      expect((await svc.getManage(adminX(), exch.id)).status).toBe('PENDING')
+    })
+
+    it('a vendor sees open requests only in the section they query', async () => {
+      const sv = (await svc.listManage(vendorA(), { limit: 100 })).data.items
+      const xv = (await svc.listManage(vendorAX(), { limit: 100 })).data.items
+      expect(sv.some((i) => i.id === sell.id)).toBe(true)
+      expect(sv.some((i) => i.id === exch.id)).toBe(false)
+      expect(xv.some((i) => i.id === exch.id)).toBe(true)
+      expect(xv.some((i) => i.id === sell.id)).toBe(false)
+    })
+
+    it('a customer’s history is separate per section', async () => {
+      const s2 = await svc.createRequest(custS(), input())
+      const x2 = await svc.createRequest(custX(), exchangeInput())
+      const mineS = (await svc.mine(F.cust, 'SELL')).data.items.map((i) => i.id)
+      const mineX = (await svc.mine(F.cust, 'EXCHANGE')).data.items.map((i) => i.id)
+      expect(mineS).toContain(s2.id); expect(mineS).not.toContain(x2.id)
+      expect(mineX).toContain(x2.id); expect(mineX).not.toContain(s2.id)
+      await expect(svc.getMine(F.cust, x2.id, 'SELL')).rejects.toMatchObject({ statusCode: 404 })
+      await expect(svc.getMine(F.cust, s2.id, 'EXCHANGE')).rejects.toMatchObject({ statusCode: 404 })
+      await expect(svc.cancel(custS(), x2.id)).rejects.toMatchObject({ statusCode: 404 })
+    })
+
+    it('an exchange can carry its order from the start (customer bought the new phone first)', async () => {
+      const o = await mkOrder2(F.cust)
+      const x = await svc.createRequest(custX(), exchangeInput({ orderNumber: o.num }))
+      expect(x.exchangeOrder.orderNumber).toBe(o.num)
+      expect(x.timeline.some((t) => t.label.includes(o.num))).toBe(true)
+      // someone else's order, or a reused one, is refused and nothing is created
+      const before = (await q(`SELECT COUNT(*)::int n FROM sell_requests`)).rows[0].n
+      await expect(svc.createRequest(custX(), exchangeInput({ orderNumber: (await mkOrder2(await mkUser('Stranger'))).num }))).rejects.toMatchObject({ code: 'ORDER_MISMATCH' })
+      await expect(svc.createRequest(custX(), exchangeInput({ orderNumber: o.num }))).rejects.toMatchObject({ code: 'ORDER_ALREADY_LINKED' })
+      expect((await q(`SELECT COUNT(*)::int n FROM sell_requests`)).rows[0].n).toBe(before)
     })
   })
 })

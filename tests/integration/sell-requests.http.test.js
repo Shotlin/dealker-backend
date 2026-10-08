@@ -109,21 +109,42 @@ d('sell requests HTTP', () => {
     expect((await app.inject({ method: 'POST', url: `${base}/approve`, headers: H })).json().data.status).toBe('APPROVED')
     expect((await app.inject({ method: 'POST', url: `${base}/complete`, headers: H })).json().data.status).toBe('COMPLETED')
     expect((await app.inject({ method: 'POST', url: `${base}/approve`, headers: H })).statusCode).toBe(409)
-    // exchange-only route: a plain sell request cannot be linked to an order
-    const lk = await app.inject({ method: 'POST', url: `${base}/link-order`, headers: H, payload: { orderNumber: 'X-1' } })
-    expect(lk.statusCode).toBe(409)
-    expect((await app.inject({ method: 'POST', url: `${base}/link-order`, headers: auth(T.vend.token), payload: { orderNumber: 'X-1' } })).statusCode).toBe(403)
+    // link-order exists only in the Exchange section
+    expect((await app.inject({ method: 'POST', url: `${base}/link-order`, headers: H, payload: { orderNumber: 'X-1' } })).statusCode).toBe(404)
+    // …and a sell request is invisible through the exchange endpoints
+    const crossGet = await app.inject({ method: 'GET', url: `/api/v1/manage/exchange-requests/${T.reqId}`, headers: H })
+    expect(crossGet.statusCode).toBe(404)
+    expect((await app.inject({ method: 'POST', url: `/api/v1/manage/exchange-requests/${T.reqId}/approve`, headers: H })).statusCode).toBe(404)
     expect((await app.inject({ method: 'GET', url: '/api/v1/manage/sell-requests/not-a-uuid', headers: H })).statusCode).toBe(400)
   })
 
   it('admin can create on behalf of a walk-in and manage the catalogue/settings', async () => {
     const H = auth(T.admin.token)
-    const r = await app.inject({ method: 'POST', url: '/api/v1/manage/sell-requests', headers: H, payload: {
+    const exBody = {
       type: 'EXCHANGE', model: 'Samsung S22', variant: '256GB', color: 'Green', imei: luhn(uniq14()), qa,
       customer: { name: 'Walk In', phone: '+91 98765 43210' }, exchange: { newProduct: 'S24', newProductPrice: 80000 },
-    } })
+    }
+    // the Sell section refuses exchanges…
+    const wrong = await app.inject({ method: 'POST', url: '/api/v1/manage/sell-requests', headers: H, payload: exBody })
+    expect(wrong.statusCode).toBe(422)
+    expect(wrong.json().code).toBe('WRONG_SECTION')
+    // …the Exchange section takes them
+    const r = await app.inject({ method: 'POST', url: '/api/v1/manage/exchange-requests', headers: H, payload: exBody })
     expect(r.statusCode).toBe(201)
+    expect(r.json().data.code).toMatch(/^EXCH-/)
     expect(r.json().data.exchange.payable).toBe(80000 - r.json().data.quote)
+    const exId = r.json().data.id
+    // exchange list/stats contain it; sell list does not
+    const exList = (await app.inject({ method: 'GET', url: '/api/v1/manage/exchange-requests?limit=100', headers: H })).json().data
+    expect(exList.items.map((i) => i.id)).toContain(exId)
+    expect(exList.items.every((i) => i.kind === 'EXCHANGE')).toBe(true)
+    const sellList = (await app.inject({ method: 'GET', url: '/api/v1/manage/sell-requests?limit=100', headers: H })).json().data
+    expect(sellList.items.map((i) => i.id)).not.toContain(exId)
+    expect((await app.inject({ method: 'GET', url: '/api/v1/manage/exchange-requests/stats', headers: H })).json().data.awaitingOrder).toBeGreaterThanOrEqual(1)
+    // exchange customer API
+    const cx = await app.inject({ method: 'GET', url: '/api/v1/exchange-requests/mine', headers: auth(T.cust.token) })
+    expect(cx.statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: `/api/v1/manage/exchange-requests/${exId}`, headers: auth(T.other.token) })).statusCode).toBe(403)
     const s = await app.inject({ method: 'GET', url: '/api/v1/manage/sell-requests/settings', headers: H })
     expect(s.statusCode).toBe(200)
     expect(s.json().data.rules.bodyDents).toBe(8)

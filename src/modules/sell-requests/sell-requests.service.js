@@ -38,6 +38,17 @@ const TAB_STATUS = {
   cancelled: ['CANCELLED'],
 }
 const num = (v) => (v == null ? null : Number(v))
+/** SELL and EXCHANGE are separate sections — every query is scoped to one. */
+export const KINDS = Object.freeze({
+  SELL: { types: ['SELL_TO_AB', 'BUY_NOW'], prefix: 'SELL', seq: 'sell_request_seq', noun: 'sell request' },
+  EXCHANGE: { types: ['EXCHANGE'], prefix: 'EXCH', seq: 'exchange_request_seq', noun: 'exchange request' },
+})
+const kindOfType = (type) => (type === 'EXCHANGE' ? 'EXCHANGE' : 'SELL')
+const scopeKindOf = (actor) => {
+  if (!KINDS[actor?.scopeKind]) throw new Error('actor.scopeKind (SELL | EXCHANGE) is required')
+  return actor.scopeKind
+}
+
 const PHONE_RE = /^\+?\d[\d ]{9,13}$/
 
 /** Run `fn(client)` inside a transaction. */
@@ -228,6 +239,7 @@ function serialize(r, { actor = { kind: 'ADMIN' }, offers = [], events = [], ass
   return {
     id: r.id,
     code: r.code,
+    kind: r.kind,
     status: r.status,
     type: r.type,
     createdAt: r.created_at.toISOString(),
@@ -296,9 +308,11 @@ async function loadEvents(requestId) {
 
 /** Visibility predicate, appended to WHERE with `params` mutated for any new binds. */
 function scope(actor, params) {
-  if (actor.kind !== 'VENDOR') return 'TRUE'
+  params.push(scopeKindOf(actor))
+  const sectionSql = `r.kind = $${params.length}`
+  if (actor.kind !== 'VENDOR') return sectionSql
   params.push(actor.vendorId)
-  return `(r.assigned_vendor_id = $${params.length} OR (r.assigned_vendor_id IS NULL AND r.status = ANY('{PENDING,IN_PROGRESS}')))`
+  return `${sectionSql} AND (r.assigned_vendor_id = $${params.length} OR (r.assigned_vendor_id IS NULL AND r.status = ANY('{PENDING,IN_PROGRESS}')))`
 }
 
 async function fetchOne(actor, id) {
@@ -375,7 +389,14 @@ export async function stats(actor) {
   )
   const agg = (sts) => rows.filter((x) => !sts || sts.includes(x.status)).reduce((a, x) => ({ total: a.total + x.total, cur: a.cur + x.cur, prev: a.prev + x.prev }), { total: 0, cur: 0, prev: 0 })
   const t = agg(null), p = agg(['PENDING']), a = agg(['APPROVED']), rj = agg(['REJECTED']), c = agg(['COMPLETED'])
+  const { rows: x } = await query(
+    `SELECT COALESCE(SUM(r.quote) FILTER (WHERE r.status IN ('APPROVED','COMPLETED')), 0) AS value,
+            COUNT(*) FILTER (WHERE r.status IN ('PENDING','IN_PROGRESS','APPROVED') AND r.exchange_order_id IS NULL)::int AS awaiting_order
+       FROM sell_requests r WHERE ${sc}`, params
+  )
   return {
+    approvedValue: Number(x[0].value),
+    awaitingOrder: scopeKindOf(actor) === 'EXCHANGE' ? x[0].awaiting_order : undefined,
     total: t.total, pending: p.total, approved: a.total, rejected: rj.total, completed: c.total,
     trend: { total: pctChange(t.cur, t.prev), pending: pctChange(p.cur, p.prev), approved: pctChange(a.cur, a.prev), rejected: pctChange(rj.cur, rj.prev), completed: pctChange(c.cur, c.prev) },
   }
@@ -409,6 +430,12 @@ async function cleanImages(images, max) {
  */
 export async function createRequest(actor, input) {
   if (!TYPES.includes(input.type)) throw new SellError('VALIDATION', 'Invalid request type', 422)
+  const section = KINDS[scopeKindOf(actor)]
+  if (!section.types.includes(input.type)) {
+    throw new SellError('WRONG_SECTION', section.prefix === 'SELL'
+      ? 'Exchanges are created from the Exchange section — use /exchange-requests'
+      : 'Sell requests are created from the Sell section — use /sell-requests', 422)
+  }
   if (!isValidImei(input.imei)) throw new SellError('INVALID_IMEI', 'IMEI must be 15 digits and pass the checksum', 422)
 
   let customer
@@ -450,22 +477,31 @@ export async function createRequest(actor, input) {
         `INSERT INTO sell_requests (code, type, user_id, customer_name, customer_phone, customer_email, customer_city,
             created_by, created_by_role, model_id, model_name, variant, color, category, imei, qa, condition, base_price,
             quote, deductions, expected_price, description, images, exchange)
-         VALUES ('SELL-' || nextval('sell_request_seq'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+         VALUES ('${section.prefix}-' || nextval('${section.seq}'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
          RETURNING *`,
         [input.type, customer.userId, customer.name, customer.phone, customer.email, customer.city, actor.userId, actor.kind,
           q.model.id, q.model.name, input.variant, input.color, q.model.category, input.imei, q.qa, q.condition, q.base,
           q.value, JSON.stringify(q.deductions), expected, description, JSON.stringify(images), exchange ? JSON.stringify(exchange) : null]
       )
-      await addEvent(client, rows[0].id, 'SUBMITTED', 'Request Submitted', actor)
+      await addEvent(client, rows[0].id, 'SUBMITTED', input.type === 'EXCHANGE' ? 'Exchange Submitted' : 'Request Submitted', actor)
+      if (input.type === 'EXCHANGE' && String(input.orderNumber ?? '').trim()) {
+        // The customer already placed the order for the new phone — link it up front.
+        const o = await findLinkableOrder(client, String(input.orderNumber).trim(), customer.userId)
+        await client.query(`UPDATE sell_requests SET exchange_order_id=$2, exchange_linked_at=NOW(), exchange_linked_by=$3 WHERE id=$1`, [rows[0].id, o.id, actor.userId])
+        await addEvent(client, rows[0].id, 'ORDER_LINKED', `Order ${o.order_number} linked`, actor, { orderId: o.id })
+      }
       created = rows[0].id
       const full = { ...rows[0], total_requests: 1 }
-      return serialize(full, { actor: { kind: 'ADMIN' }, events: [{ kind: 'SUBMITTED', label: 'Request Submitted', created_at: rows[0].created_at }] })
-    })
+      return full
+    }).then(async (full) => getManage({ kind: 'ADMIN', scopeKind: full.kind }, full.id))
     notifySellEvent('SUBMITTED', created)
     return out
   } catch (err) {
     if (err.code === '23505' && String(err.constraint).includes('active_imei')) {
       throw new SellError('IMEI_ACTIVE', 'A live request already exists for this IMEI', 409)
+    }
+    if (err.code === '23505' && String(err.constraint).includes('exchange_order')) {
+      throw new SellError('ORDER_ALREADY_LINKED', 'That order is already linked to another trade-in', 409)
     }
     throw err
   }
@@ -473,16 +509,16 @@ export async function createRequest(actor, input) {
 
 // ── Customer reads ──────────────────────────────────────────────────────
 
-export async function mine(userId, { page = 1, limit = 20 } = {}) {
+export async function mine(userId, kind, { page = 1, limit = 20 } = {}) {
   const lim = Math.min(50, Math.max(1, Number(limit) || 20))
   const off = (Math.max(1, Number(page)) - 1) * lim
-  const { rows } = await query(`${SELECT_REQ} WHERE r.user_id = $1 ORDER BY r.created_at DESC LIMIT $2 OFFSET $3`, [userId, lim, off])
-  const { rows: c } = await query('SELECT COUNT(*)::int AS n FROM sell_requests WHERE user_id = $1', [userId])
+  const { rows } = await query(`${SELECT_REQ} WHERE r.user_id = $1 AND r.kind = $4 ORDER BY r.created_at DESC LIMIT $2 OFFSET $3`, [userId, lim, off, kind])
+  const { rows: c } = await query('SELECT COUNT(*)::int AS n FROM sell_requests WHERE user_id = $1 AND kind = $2', [userId, kind])
   return { success: true, data: { items: rows.map((r) => serialize(r, { assignedVendorName: null })), total: c[0].n } }
 }
 
-export async function getMine(userId, id) {
-  const { rows } = await query(`${SELECT_REQ} WHERE r.id = $1 AND r.user_id = $2`, [id, userId])
+export async function getMine(userId, id, kind) {
+  const { rows } = await query(`${SELECT_REQ} WHERE r.id = $1 AND r.user_id = $2 AND r.kind = $3`, [id, userId, kind])
   if (!rows[0]) throw new SellError('NOT_FOUND', 'Sell request not found', 404)
   const events = await loadEvents(id)
   // Customers see the best open offer amount only — not which vendor made it.
@@ -497,9 +533,12 @@ export async function getMine(userId, id) {
 
 // ── State transitions ───────────────────────────────────────────────────
 
-async function lock(client, id) {
+async function lock(client, id, actor) {
   const { rows } = await client.query('SELECT * FROM sell_requests WHERE id = $1 FOR UPDATE', [id])
-  if (!rows[0]) throw new SellError('NOT_FOUND', 'Sell request not found', 404)
+  // A request from the other section is invisible here, exactly as if it did not exist.
+  if (!rows[0] || rows[0].kind !== scopeKindOf(actor)) {
+    throw new SellError('NOT_FOUND', `${scopeKindOf(actor) === 'EXCHANGE' ? 'Exchange' : 'Sell'} request not found`, 404)
+  }
   return rows[0]
 }
 
@@ -514,7 +553,7 @@ const noteOf = (v, { required = false, name = 'A note' } = {}) => {
 }
 
 export const approve = (actor, id) => tx(async (client) => {
-  const r = await lock(client, id)
+  const r = await lock(client, id, actor)
   need(r, OPEN, 'Only pending or in-progress requests can be approved')
   if (!r.assigned_vendor_id) throw new SellError('NO_VENDOR', 'Assign a vendor offer before approving', 409)
   await client.query(`UPDATE sell_requests SET status='APPROVED', decided_by=$2, decided_at=NOW(), updated_at=NOW() WHERE id=$1`, [id, actor.userId])
@@ -523,7 +562,7 @@ export const approve = (actor, id) => tx(async (client) => {
 
 export const reject = (actor, id, reason) => tx(async (client) => {
   const note = noteOf(reason, { required: true, name: 'A reason' })
-  const r = await lock(client, id)
+  const r = await lock(client, id, actor)
   need(r, OPEN, 'Only pending or in-progress requests can be rejected')
   await client.query(`UPDATE sell_requests SET status='REJECTED', admin_note=$2, decided_by=$3, decided_at=NOW(), updated_at=NOW() WHERE id=$1`, [id, note, actor.userId])
   await client.query(`UPDATE sell_request_offers SET status='DECLINED', updated_at=NOW() WHERE request_id=$1 AND status='OPEN'`, [id])
@@ -533,7 +572,7 @@ export const reject = (actor, id, reason) => tx(async (client) => {
 
 export const requestInfo = (actor, id, message) => tx(async (client) => {
   const note = noteOf(message, { required: true, name: 'A message' })
-  const r = await lock(client, id)
+  const r = await lock(client, id, actor)
   need(r, OPEN, 'Details can only be requested on open requests')
   await client.query(`UPDATE sell_requests SET admin_note=$2, updated_at=NOW() WHERE id=$1`, [id, note])
   await addEvent(client, id, 'INFO_REQUESTED', 'More details requested from customer', actor, { message: note })
@@ -541,7 +580,7 @@ export const requestInfo = (actor, id, message) => tx(async (client) => {
 }).then((note) => { notifySellEvent('INFO_REQUESTED', id, { message: note }); return getManage(actor, id) })
 
 export const complete = (actor, id) => tx(async (client) => {
-  const r = await lock(client, id)
+  const r = await lock(client, id, actor)
   need(r, ['APPROVED'], 'Only approved requests can be completed')
   if (r.type === 'EXCHANGE' && !r.exchange_order_id) {
     throw new SellError('EXCHANGE_ORDER_REQUIRED', 'Link the order for the new product before completing an exchange', 409)
@@ -550,6 +589,19 @@ export const complete = (actor, id) => tx(async (client) => {
   await addEvent(client, id, 'COMPLETED', 'Completed', actor)
 }).then(() => { notifySellEvent('COMPLETED', id); return getManage(actor, id) })
 
+/** Find the order for the new product and check it can settle this customer's trade-in. */
+async function findLinkableOrder(client, key, userId) {
+  if (!userId) throw new SellError('NO_CUSTOMER_ACCOUNT', 'This customer has no app account, so an order cannot be linked', 409)
+  const { rows } = await client.query(
+    `SELECT id, customer_id AS user_id, status::text AS status, order_number FROM orders WHERE order_number = $1 OR id::text = $1 LIMIT 1`, [key]
+  )
+  const o = rows[0]
+  if (!o) throw new SellError('ORDER_NOT_FOUND', 'Order not found', 404)
+  if (o.user_id !== userId) throw new SellError('ORDER_MISMATCH', 'That order belongs to a different customer', 409)
+  if (o.status === 'CANCELLED') throw new SellError('ORDER_CANCELLED', 'That order is cancelled', 409)
+  return o
+}
+
 /**
  * Link the order for the new product to an EXCHANGE request (by order number or id).
  * The order must belong to the same customer and not be cancelled; one order settles one trade-in.
@@ -557,17 +609,11 @@ export const complete = (actor, id) => tx(async (client) => {
 export const linkOrder = (actor, id, ref) => tx(async (client) => {
   const key = String(ref ?? '').trim()
   if (!key) throw new SellError('VALIDATION', 'Order number is required', 422)
-  const r = await lock(client, id)
+  const r = await lock(client, id, actor)
   if (r.type !== 'EXCHANGE') throw new SellError('INVALID_STATE', 'Only exchange requests can be linked to an order', 409)
-  need(r, ['APPROVED'], 'Approve the exchange before linking an order')
-  if (!r.user_id) throw new SellError('NO_CUSTOMER_ACCOUNT', 'This customer has no app account, so an order cannot be linked', 409)
-  const { rows } = await client.query(
-    `SELECT id, customer_id AS user_id, status::text AS status, order_number FROM orders WHERE order_number = $1 OR id::text = $1 LIMIT 1`, [key]
-  )
-  const o = rows[0]
-  if (!o) throw new SellError('ORDER_NOT_FOUND', 'Order not found', 404)
-  if (o.user_id !== r.user_id) throw new SellError('ORDER_MISMATCH', 'That order belongs to a different customer', 409)
-  if (o.status === 'CANCELLED') throw new SellError('ORDER_CANCELLED', 'That order is cancelled', 409)
+  need(r, [...OPEN, 'APPROVED'], 'Only open or approved exchanges can be linked to an order')
+  if (r.exchange_order_id) throw new SellError('ORDER_ALREADY_LINKED', 'This exchange already has an order linked', 409)
+  const o = await findLinkableOrder(client, key, r.user_id)
   try {
     await client.query(`UPDATE sell_requests SET exchange_order_id=$2, exchange_linked_at=NOW(), exchange_linked_by=$3, updated_at=NOW() WHERE id=$1`, [id, o.id, actor.userId])
   } catch (err) {
@@ -579,7 +625,7 @@ export const linkOrder = (actor, id, ref) => tx(async (client) => {
 
 /** Admin cancels any open/approved request; a customer may cancel their own until it is approved. */
 export const cancel = (actor, id, reason) => tx(async (client) => {
-  const r = await lock(client, id)
+  const r = await lock(client, id, actor)
   if (actor.kind === 'CUSTOMER') {
     if (r.user_id !== actor.userId) throw new SellError('NOT_FOUND', 'Sell request not found', 404)
     need(r, OPEN, 'This request can no longer be cancelled')
@@ -589,10 +635,10 @@ export const cancel = (actor, id, reason) => tx(async (client) => {
   await client.query(`UPDATE sell_requests SET status='CANCELLED', admin_note=COALESCE($2, admin_note), updated_at=NOW() WHERE id=$1`, [id, noteOf(reason) || null])
   await client.query(`UPDATE sell_request_offers SET status='DECLINED', updated_at=NOW() WHERE request_id=$1 AND status IN ('OPEN','ACCEPTED')`, [id])
   await addEvent(client, id, 'CANCELLED', actor.kind === 'CUSTOMER' ? 'Cancelled by customer' : 'Cancelled', actor)
-}).then(() => { notifySellEvent('CANCELLED', id, { skipCustomer: actor.kind === 'CUSTOMER' }) }).then(() => (actor.kind === 'CUSTOMER' ? getMine(actor.userId, id) : getManage(actor, id)))
+}).then(() => { notifySellEvent('CANCELLED', id, { skipCustomer: actor.kind === 'CUSTOMER' }) }).then(() => (actor.kind === 'CUSTOMER' ? getMine(actor.userId, id, scopeKindOf(actor)) : getManage(actor, id)))
 
 export const assignVendor = (actor, id, vendorId) => tx(async (client) => {
-  const r = await lock(client, id)
+  const r = await lock(client, id, actor)
   need(r, OPEN, 'A vendor can only be assigned to open requests')
   const { rows } = await client.query(
     `SELECT o.*, v.name FROM sell_request_offers o JOIN vendors v ON v.id = o.vendor_id
@@ -618,7 +664,7 @@ export const placeOffer = (actor, id, input) => tx(async (client) => {
   if (!Number.isFinite(amount) || amount <= 0) throw new SellError('VALIDATION', 'Offer amount must be greater than zero', 422)
   const { rows: v } = await client.query(`SELECT 1 FROM vendors WHERE id = $1 AND is_active = TRUE AND status IN ('VERIFIED','ACTIVE') AND deleted_at IS NULL`, [actor.vendorId])
   if (!v[0]) throw new SellError('VENDOR_NOT_ACTIVE', 'Only verified, active vendors can place offers', 403)
-  const r = await lock(client, id)
+  const r = await lock(client, id, actor)
   need(r, OPEN, 'This request is no longer open for offers')
   if (r.assigned_vendor_id) throw new SellError('ALREADY_ASSIGNED', 'A vendor has already been assigned', 409)
   if (amount > Number(r.base_price) * 1.25) throw new SellError('VALIDATION', 'Offer is unrealistically high for this device', 422)
@@ -633,7 +679,7 @@ export const placeOffer = (actor, id, input) => tx(async (client) => {
 }).then(() => getManage(actor, id))
 
 export const withdrawOffer = (actor, id) => tx(async (client) => {
-  const r = await lock(client, id)
+  const r = await lock(client, id, actor)
   need(r, OPEN, 'This request is no longer open')
   if (r.assigned_vendor_id === actor.vendorId) throw new SellError('ALREADY_ASSIGNED', 'You are already assigned — ask an admin to cancel', 409)
   const { rowCount } = await client.query(`UPDATE sell_request_offers SET status='WITHDRAWN', updated_at=NOW() WHERE request_id=$1 AND vendor_id=$2 AND status='OPEN'`, [id, actor.vendorId])

@@ -49,6 +49,14 @@ async function vendorUserIds(vendorIds) {
   return rows.map((r) => r.user_id)
 }
 
+/** Exchange requests say "exchange"/"trade-in" where sell requests say "request". */
+const forType = (r, m) => {
+  if (r.type !== 'EXCHANGE') return m
+  const fix = (t) => t.replace('Request', 'Exchange').replace('request', 'exchange').replace('New device to quote', 'New trade-in to quote')
+    .replace('A buyer has been found', 'Trade-in value confirmed')
+  return { ...m, title: fix(m.title), body: fix(m.body) }
+}
+
 const rupees = (n) => `₹${Number(n).toLocaleString('en-IN')}`
 const MAX_BROADCAST_VENDORS = 500
 
@@ -86,6 +94,7 @@ const COPY = {
  * @param {object} [extra]  { reason, message, skipCustomer, declinedVendorIds }
  */
 export function notifySellEvent(kind, requestId, extra = {}) {
+  if (process.env.SELL_DEMO_SEED) return // the demo seed must not push to real devices
   setImmediate(async () => {
     try {
       const copy = COPY[kind]
@@ -93,10 +102,10 @@ export function notifySellEvent(kind, requestId, extra = {}) {
       const { rows } = await query('SELECT * FROM sell_requests WHERE id = $1', [requestId])
       const r = rows[0]
       if (!r) return
-      const data = { event: `sell_request:${kind.toLowerCase()}`, requestId: r.id, code: r.code, status: r.status }
+      const data = { event: `${r.kind === 'EXCHANGE' ? 'exchange_request' : 'sell_request'}:${kind.toLowerCase()}`, kind: r.kind, requestId: r.id, code: r.code, status: r.status }
 
       if (copy.c && r.user_id && !extra.skipCustomer) {
-        await send([r.user_id], 'customer', { ...copy.c(r, extra), data })
+        await send([r.user_id], 'customer', { ...forType(r, copy.c(r, extra)), data })
       }
       if (copy.v) {
         const v = copy.v(r, extra)
@@ -113,7 +122,8 @@ export function notifySellEvent(kind, requestId, extra = {}) {
             [MAX_BROADCAST_VENDORS])
           vendorIds = a.map((x) => x.id)
         }
-        await send(await vendorUserIds(vendorIds), 'vendor', { title: v.title, body: v.body, data })
+        const vm = forType(r, v)
+        await send(await vendorUserIds(vendorIds), 'vendor', { title: vm.title, body: vm.body, data })
       }
     } catch (err) {
       logger.warn({ err: err.message, kind, requestId }, 'sell-request notification failed (non-critical)')

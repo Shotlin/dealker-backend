@@ -180,6 +180,9 @@ const CANONICAL_PERMISSION_LIST = Object.freeze([
   'sell_requests.view',
   'sell_requests.manage',
   'sell_requests.settings',
+  // ── Exchange requests (trade-in with a new purchase) ───────────────────
+  'exchange_requests.view',
+  'exchange_requests.manage',
   // ── Sponsored ads ──────────────────────────────────────────────────────
   'ads.view',
   'ads.manage',

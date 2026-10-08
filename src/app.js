@@ -485,12 +485,15 @@ export const buildApp = async () => {
   await app.register(auctionsRoutes, { prefix: "/api/v1/auctions" });
   await app.register(auctionManageRoutes, { prefix: "/api/v1/manage/auctions" });
 
-  // Sell & exchange — customers sell/trade in used devices; vendors bid; admin approves
-  const { sellRequestsRoutes, sellRequestManageRoutes } = await import(
+  // Sell requests (customer sells an old device) and Exchange requests (buys new + trades in the old)
+  // — two separate sections sharing one valuation engine; see sell-requests.routes.js
+  const { sellRequestsRoutes, sellRequestManageRoutes, exchangeRequestsRoutes, exchangeRequestManageRoutes } = await import(
     "./modules/sell-requests/sell-requests.routes.js"
   );
   await app.register(sellRequestsRoutes, { prefix: "/api/v1/sell-requests" });
   await app.register(sellRequestManageRoutes, { prefix: "/api/v1/manage/sell-requests" });
+  await app.register(exchangeRequestsRoutes, { prefix: "/api/v1/exchange-requests" });
+  await app.register(exchangeRequestManageRoutes, { prefix: "/api/v1/manage/exchange-requests" });
 
   // Sponsored ads — pay-per-click product promotion (shopper click billing + admin/vendor management)
   const { adsPublicRoutes, adsManageRoutes } = await import(
