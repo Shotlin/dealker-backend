@@ -155,6 +155,9 @@ export const buildApp = async () => {
     root: (await import("./modules/uploads/local-uploads.routes.js")).UPLOAD_DIR,
     prefix: "/uploads/",
     decorateReply: false,
+    // Uploaded photos are embedded by the dashboard and customer apps on other origins; helmet's
+    // default `same-origin` CORP would make every browser refuse to render them.
+    setHeaders: (res) => res.setHeader("Cross-Origin-Resource-Policy", "cross-origin"),
   });
   await app.register(import("./modules/uploads/local-uploads.routes.js"), { prefix: "/api/v1/uploads/local" });
   await app.register(async (i) => i.register((await import("./modules/listings/listings.routes.js")).adminListingRoutes), {
@@ -481,6 +484,13 @@ export const buildApp = async () => {
   );
   await app.register(auctionsRoutes, { prefix: "/api/v1/auctions" });
   await app.register(auctionManageRoutes, { prefix: "/api/v1/manage/auctions" });
+
+  // Sell & exchange — customers sell/trade in used devices; vendors bid; admin approves
+  const { sellRequestsRoutes, sellRequestManageRoutes } = await import(
+    "./modules/sell-requests/sell-requests.routes.js"
+  );
+  await app.register(sellRequestsRoutes, { prefix: "/api/v1/sell-requests" });
+  await app.register(sellRequestManageRoutes, { prefix: "/api/v1/manage/sell-requests" });
 
   // Sponsored ads — pay-per-click product promotion (shopper click billing + admin/vendor management)
   const { adsPublicRoutes, adsManageRoutes } = await import(

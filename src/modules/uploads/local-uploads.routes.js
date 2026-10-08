@@ -5,7 +5,7 @@ import { pipeline } from 'node:stream/promises'
 
 export const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve(process.cwd(), 'uploads')
 fs.mkdirSync(UPLOAD_DIR, { recursive: true })
-const PUBLIC_BASE = (process.env.UPLOADS_PUBLIC_URL || 'http://localhost:4500/uploads').replace(/\/$/, '')
+export const PUBLIC_BASE = (process.env.UPLOADS_PUBLIC_URL || 'http://localhost:4500/uploads').replace(/\/$/, '')
 const ALLOWED = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }
 
 /**

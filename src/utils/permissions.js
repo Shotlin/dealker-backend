@@ -176,6 +176,10 @@ const CANONICAL_PERMISSION_LIST = Object.freeze([
   'auctions.manage',
   'auctions.moderate',
   'auctions.settings',
+  // ── Sell & exchange requests ───────────────────────────────────────────
+  'sell_requests.view',
+  'sell_requests.manage',
+  'sell_requests.settings',
   // ── Sponsored ads ──────────────────────────────────────────────────────
   'ads.view',
   'ads.manage',
