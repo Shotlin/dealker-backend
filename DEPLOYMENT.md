@@ -4,9 +4,10 @@ Source of truth for the **demo/testing** EC2 server. Keep it updated: after any 
 **Backend only — the dashboard is NOT deployed here.**
 
 ## Server
-- Host: `ec2-13-201-85-54.ap-south-1.compute.amazonaws.com` (13.201.85.54), AWS ap-south-1, Ubuntu 26.04, 2 vCPU / 3.7 GB RAM (+2 GB swap), 28 GB disk
-- SSH: `ssh -i ~/Downloads/dealker-backend.pem ubuntu@ec2-13-201-85-54.ap-south-1.compute.amazonaws.com` (user `ubuntu`, passwordless sudo, in `docker` group)
-- Public URL: **https://api.dealker.agnixstudio.in** (Let's Encrypt via certbot, auto-renews through `certbot.timer`, expires 2027-01-05; Cloudflare A record `api.dealker` → 13.201.85.54, DNS-only). `http://13.201.85.54` still works without TLS.
+- Host: `ec2-13-127-248-57.ap-south-1.compute.amazonaws.com` (13.127.248.57), AWS ap-south-1, Ubuntu 26.04, 2 vCPU / 3.7 GB RAM (+2 GB swap), 28 GB disk. **Moved here on 2026-10-09; the old server 13.201.85.54 is retired.**
+- Key: `dealkerbackend.pem` lives in the workspace root (next to `dealker-backend/`, outside this git repo — never commit it); keep it `chmod 400`. Commands below assume you run them from `dealker-backend/`.
+- SSH: `ssh -i "../dealkerbackend.pem" ubuntu@ec2-13-127-248-57.ap-south-1.compute.amazonaws.com` (user `ubuntu`, passwordless sudo, in `docker` group)
+- Public URL: **https://api.dealker.agnixstudio.in** (Let's Encrypt via certbot, auto-renews through `certbot.timer`, issued 2026-10-09; Cloudflare A record `api.dealker` → 13.127.248.57, DNS-only). `http://13.127.248.57` still works without TLS.
 - Firewall (ufw): 22, 80, 443 only. fail2ban + unattended-upgrades enabled.
 
 ## Layout
@@ -14,10 +15,10 @@ Source of truth for the **demo/testing** EC2 server. Keep it updated: after any 
 |---|---|
 | `/opt/dealker/app` | git clone of https://github.com/Shotlin/dealker-backend (branch `main`). Deploy-only — never edit by hand. |
 | `/opt/dealker/deploy.sh` | The deploy script (see below) |
-| `/opt/dealker/patches/*.patch` | Local patches re-applied on every deploy (see "Known repo issues") |
+| `/opt/dealker/compose.uploads.yml` | Compose override mounting `/srv/dealker/uploads` into api/worker at `/app/uploads` (always passed with `-f`) |
 | `/opt/dealker/last-deploy.log` | Output of the most recent deploy |
 | `/opt/dealker/app/deploy/production/{app.env,infra.env}` | Secrets (chmod 600, git-excluded via `.git/info/exclude`). Freshly generated; not stored anywhere else. |
-| `/srv/dealker/{postgres,redis,backups}` | Bind-mounted data + `pg_dump` backups |
+| `/srv/dealker/{postgres,redis,backups,uploads}` | Bind-mounted data, `pg_dump` backups, uploaded files (owned by uid 100 = container `appuser`). Host nginx serves `/uploads/` straight from this dir. |
 
 ## Architecture
 ```
@@ -30,32 +31,31 @@ Compose project `dealker` (`docker-compose.prod.yml`). Containers use `restart: 
 
 ## Deploy / update (run after pushing to GitHub `main`)
 ```bash
-ssh -i ~/Downloads/dealker-backend.pem ubuntu@ec2-13-201-85-54.ap-south-1.compute.amazonaws.com '/opt/dealker/deploy.sh'
+ssh -i "../dealkerbackend.pem" ubuntu@ec2-13-127-248-57.ap-south-1.compute.amazonaws.com '/opt/dealker/deploy.sh'
 ```
-Does: fetch origin/main → reset tree → pg_dump backup (keeps 5) → tag rollback images (keeps 2) → apply patches → build → migrate → `up -d api worker nginx` → restart nginx (it caches api IPs) → wait for `/health/ready` → error scan → image/build-cache prune. `FORCE=1` rebuilds even if already at origin/main.
+Does: fetch origin/main → reset tree → pg_dump backup (keeps 5) → build → migrate → `up -d api worker nginx` → restart nginx (it caches api IPs) → wait for `/health/ready` locally and over public HTTPS → image prune. It always rebuilds.
 
 Useful:
 ```bash
-cd /opt/dealker/app && C="docker compose --env-file deploy/production/infra.env -f docker-compose.prod.yml"
+cd /opt/dealker/app && C="docker compose --env-file deploy/production/infra.env -f docker-compose.prod.yml -f /opt/dealker/compose.uploads.yml"
 $C ps ; $C logs -f --tail 100 api worker ; df -h / ; docker system df
 ```
 Rollback: `docker tag dealker-api:rollback-pre-<sha> dealker-api:latest` (same for worker) then `$C up -d api worker && $C restart nginx`; DB dumps in `/srv/dealker/backups`.
 
 ## Config choices (demo server)
 - `ALLOW_DEMO_OTP=true`, `SMS_PROVIDER=none`: demo phones 9000000001–9000000005 log in with OTP `123456`. `ALLOW_DEMO_DELIVERY_ACTIONS=true`. **Turn off before any real use.**
+- `UPLOAD_DIR=/app/uploads`, `UPLOADS_PUBLIC_URL=https://api.dealker.agnixstudio.in/uploads`; demo images (`/uploads/demo/*.svg`) were copied from the local Docker volume.
+- Host nginx has `proxy_buffer_size 32k` (needed: admin login sets a huge cookie; without it login returns 502 "upstream sent too big header").
 - `ENABLE_SWAGGER=false`. Razorpay, FCM, Cloudinary, 2Factor are unset (add to `app.env`, then `FORCE=1 /opt/dealker/deploy.sh`).
 - Dashboard (hosted elsewhere, not on this server): https://dash.dealker.agnixstudio.in. `FRONTEND_URL`/`ADMIN_URL` point to it. `CORS_ORIGINS` = dash/apex/www/api `.dealker.agnixstudio.in` + localhost dev ports (3000-3002, 4501, 5173). Not wildcard on purpose: CORS uses `credentials: true`. To add an origin: edit `CORS_ORIGINS` in `app.env`, then `docker compose ... up -d --force-recreate api worker && ... restart nginx`. Code also always allows *.bakaloo.in, *.shotlin.in, *.vercel.app.
 - No automated DB backups beyond the pre-deploy dump.
 
-## Patches
-`/opt/dealker/patches/*.patch` is a hook for temporary local fixes: `deploy.sh` applies each one after pulling and skips any that are already upstream or no longer apply. **Currently empty** — the abandoned-cart feature and the worker fix are both on GitHub `main` now.
-
 ## Deploy in two commands
 ```bash
-ssh -i ~/Downloads/dealker-backend.pem ubuntu@ec2-13-201-85-54.ap-south-1.compute.amazonaws.com   # 1) log in
+ssh -i "../dealkerbackend.pem" ubuntu@ec2-13-127-248-57.ap-south-1.compute.amazonaws.com   # 1) log in
 /opt/dealker/deploy.sh                                                                               # 2) deploy (run on the server)
 ```
-Or as one line from your Mac: `ssh -i ~/Downloads/dealker-backend.pem ubuntu@ec2-13-201-85-54.ap-south-1.compute.amazonaws.com '/opt/dealker/deploy.sh'`.
+Or as one line from your Mac: `ssh -i "../dealkerbackend.pem" ubuntu@ec2-13-127-248-57.ap-south-1.compute.amazonaws.com '/opt/dealker/deploy.sh'`.
 Ends with `=== DEPLOY OK ===` (exit 0) or `=== DEPLOY FAILED ===` (exit 1).
 
 ## Abandoned carts
@@ -69,6 +69,7 @@ Ends with `=== DEPLOY OK ===` (exit 0) or `=== DEPLOY FAILED ===` (exit 1).
 - `CLOUD.md`, `routine-deploy.sh`, `redeploy-from-local.sh` in the repo describe a different (FreshCuts) server — don't use them for this one.
 
 ## Change log
+- 2026-10-09: **Migrated to a new server (13.127.248.57).** Fresh install of Docker/nginx/certbot/ufw/fail2ban, repo cloned at `98623d6`, new secrets generated (`app.env`/`infra.env`), local demo DB restored (131 products, 278 orders, 75 users; `localhost:4500/uploads` URLs rewritten to `https://api.dealker.agnixstudio.in/uploads`), migration 177 applied, TLS issued, `/opt/dealker/deploy.sh` recreated (pre-deploy `pg_dump`, build, migrate, health check). Verified: `/health/ready`, public products 200, admin logins 200, demo OTP, uploaded image 200. DNS `api.dealker` already pointed at the new IP. Old server entries below are history.
 - 2026-10-07: GitHub main moved to ddc0647 (includes abandoned carts + worker fix + migration 172_auctions). deploy.sh hardened (waits for every container healthy, public HTTPS check, non-zero exit on failure, stale patches only warn). Both patches removed.
 - 2026-10-07: Deployed abandoned-cart feature (backend patch), seeded demo episodes (7 open), set threshold to 2 min. Verified over HTTPS: summary/list APIs 200; a real demo-customer cart was auto-detected ~2 min after last activity. deploy.sh now also runs `git clean -fdq`.
 - 2026-10-07: Restored local demo DB (pg_dump of local dealker-postgres-1: 131 products, 260 orders, 14 vendors, 5 admins, 49 customers) over the empty server DB. Pre-restore backup: /srv/dealker/backups/pre-demo-restore.dump. Admin logins verified (200). Demo admin emails: superadmin@/demo@/riya@/karan@/neha@dealker.local (passwords in local docker-compose.yml / seed scripts). Re-sync demo data = repeat dump/restore.
