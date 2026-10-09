@@ -27,6 +27,8 @@ const clear = process.argv.includes('--clear')
 
 const url = (name) => `${PUBLIC_BASE}/demo-home/${name}.png`
 
+// Electronics category on the dev DB (look it up by slug if this DB is recreated).
+const ELECTRONICS_CATEGORY_ID = '520d8af1-6edc-45da-b58c-9fb9cb77ea0f'
 const YELLOW = '#F7DC4E'
 const YELLOW_SOFT = '#FBE979'
 
@@ -63,7 +65,7 @@ const themeData = (store) => ({
     topBar: { textColor: '#111111', backgroundColor: YELLOW },
     feeStrip: { visible: true, imageUrl: null },
     bankOffers: { visible: false, bannerImageUrls: [] },
-    searchZone: { waveColor: YELLOW, searchHints: HINTS[store], backgroundColor: YELLOW_SOFT, promoBoxImageUrl: url('promo-repellents') },
+    searchZone: { waveColor: YELLOW, searchHints: HINTS[store], backgroundColor: YELLOW, promoBoxImageUrl: url('promo-repellents') },
     storeSelector: { activeChipColor: '#FFFFFF', backgroundColor: YELLOW },
     seasonalMosaic: {
       heroTile: { title: 'DEAL ZONE', gradient: ['#FFA43A', '#F57C00'], badgeText: 'BUY 1\nGET 2', badgeGradient: ['#111111', '#111111'] },
@@ -95,11 +97,12 @@ const sectionRows = (store) => [
   ['seasonal_mosaic', {
     layout_variant: 'hero_plus_four', hero_ratio: '16:10', tile_radius: 16, container_color: YELLOW_SOFT,
     hero_tile: { title: 'DEAL ZONE', gradient: ['#FFA43A', '#F57C00'], badge_text: 'BUY 1\nGET 2', badge_gradient: ['#111111', '#111111'], image_url: url('deal-zone') },
+    // Demo tiles open the Electronics category; captions are admin copy (no prices are invented).
     mini_tiles: [
-      { title: 'Home Furnishing', gradient: ['#FFF4DB', '#FFF4DB'], image_url: url('tile-furnishing') },
-      { title: 'Gardening & More', gradient: ['#FFF4DB', '#FFF4DB'], image_url: url('tile-gardening') },
-      { title: 'Home Decor', gradient: ['#FFF4DB', '#FFF4DB'], image_url: url('tile-decor') },
-      { title: 'Home Improvement', gradient: ['#FFF4DB', '#FFF4DB'], image_url: url('tile-improvement') },
+      { title: 'Smartphones', gradient: ['#FFF4DB', '#FFF4DB'], image_url: url('tab-smartphones'), caption: 'Shop now', action: { type: 'category', value: ELECTRONICS_CATEGORY_ID } },
+      { title: 'Laptops', gradient: ['#FFF4DB', '#FFF4DB'], image_url: url('tab-laptops'), caption: 'Shop now', action: { type: 'category', value: ELECTRONICS_CATEGORY_ID } },
+      { title: 'Headphones', gradient: ['#FFF4DB', '#FFF4DB'], image_url: url('tab-audio'), caption: 'Shop now', action: { type: 'category', value: ELECTRONICS_CATEGORY_ID } },
+      { title: 'Smart Watches', gradient: ['#FFF4DB', '#FFF4DB'], image_url: url('tab-wearables'), caption: 'Shop now', action: { type: 'category', value: ELECTRONICS_CATEGORY_ID } },
     ],
   }],
 ]
