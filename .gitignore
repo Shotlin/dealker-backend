@@ -31,3 +31,6 @@ coverage/
 # PM2
 .pm2/
 docker-compose.override.yml
+
+# Private invoice storage
+private-uploads/

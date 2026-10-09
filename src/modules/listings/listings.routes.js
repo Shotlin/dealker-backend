@@ -16,7 +16,7 @@ const bodySchema = {
     condition: { enum: ['NEW', 'OPEN_BOX', 'REFURBISHED', 'USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR'] },
     conditionNotes: { type: 'string', maxLength: 1000 }, usageDuration: { type: 'string', maxLength: 100 },
     warrantyInfo: { type: 'string', maxLength: 200 }, accessoriesIncluded: { type: 'string', maxLength: 300 },
-    batteryHealth: { type: ['integer', 'null'], minimum: 1, maximum: 100 }, serialNumber: { type: 'string', maxLength: 100 },
+    batteryHealth: { type: ['integer', 'null'], minimum: 1, maximum: 100 }, serialNumber: { type: 'string', maxLength: 100 }, imei: { type: 'string', maxLength: 20 },
     hasInvoice: { type: 'boolean' }, images: { type: 'array', items: { type: 'string' }, maxItems: 8 },
     price: { type: 'number', minimum: 0 }, mrp: { type: ['number', 'null'], minimum: 0 }, stock: { type: 'integer', minimum: 0, maximum: 100000 },
     sku: { type: 'string', maxLength: 80 }, hsnCode: { type: 'string', maxLength: 20 }, gstRate: { type: ['number', 'null'] },

@@ -537,6 +537,20 @@ export const buildApp = async () => {
   const { adminVendorWalletRoutes } = await import("./modules/vendor-wallet/vendor-wallet.routes.js");
   await app.register(adminVendorWalletRoutes, { prefix: "/api/v1/admin/vendor-wallet" });
 
+  // Product QC + seller invoices
+  const { adminQcRoutes } = await import("./modules/qc/qc.routes.js");
+  await app.register(adminQcRoutes, { prefix: "/api/v1/admin/qc" });
+  const { adminInvoicesRoutes, vendorInvoicesRoutes } = await import("./modules/invoices/invoices.routes.js");
+  await app.register(adminInvoicesRoutes, { prefix: "/api/v1/admin/invoices" });
+  await app.register(vendorInvoicesRoutes, { prefix: "/api/v1/vendor/invoices" });
+
+  // Global price control + merchandising (sections, channels, bulk actions)
+  const { adminPricingRoutes } = await import("./modules/pricing/pricing.routes.js");
+  await app.register(adminPricingRoutes, { prefix: "/api/v1/admin/pricing" });
+  const { adminMerchandisingRoutes, publicSectionRoutes } = await import("./modules/merchandising/merchandising.routes.js");
+  await app.register(adminMerchandisingRoutes, { prefix: "/api/v1/admin/merchandising" });
+  await app.register(publicSectionRoutes, { prefix: "/api/v1/discovery/sections" });
+
   // Marketplace Catalog — location-first discovery/ranking + seller-listing moderation
   const { publicDiscoveryRoutes, adminSellerListingsRoutes } = await import(
     "./modules/marketplace-catalog/marketplace-catalog.routes.js"

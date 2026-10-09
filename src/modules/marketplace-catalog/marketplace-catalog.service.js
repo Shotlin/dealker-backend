@@ -34,7 +34,7 @@ export class MarketplaceCatalogService {
       ? `(s.pincode = $1 OR $1::text = ANY (s.serviceable_pincodes))`
       : `FALSE`
 
-    const where = [`($1::text IS NOT NULL OR $2::numeric IS NOT NULL OR $3::numeric IS NOT NULL OR TRUE)`, `p.deleted_at IS NULL`, `p.is_active = TRUE`, `sp.deleted_at IS NULL`, `s.deleted_at IS NULL`, `s.is_active = TRUE`, `sp.listing_status = 'ACTIVE'`, `sp.approval_status = 'APPROVED'`]
+    const where = [`($1::text IS NOT NULL OR $2::numeric IS NOT NULL OR $3::numeric IS NOT NULL OR TRUE)`, `p.deleted_at IS NULL`, `p.is_active = TRUE`, `sp.deleted_at IS NULL`, `s.deleted_at IS NULL`, `s.is_active = TRUE`, `sp.listing_status = 'ACTIVE'`, `sp.approval_status = 'APPROVED'`, `sp.sell_b2c = TRUE`]
     if (inStockOnly) where.push(`sp.stock_quantity > 0 AND sp.is_available = TRUE`)
     if (brand) { params.push(brand); where.push(`p.brand = $${params.length}`) }
     if (categoryId) { params.push(categoryId); where.push(`(p.category_id = $${params.length} OR p.category_id IN (SELECT id FROM categories WHERE parent_id = $${params.length}))`) }

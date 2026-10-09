@@ -1,4 +1,7 @@
 import { query, getClient } from '../../config/database.js'
+import { QcService } from '../qc/qc.service.js'
+
+const qc = new QcService()
 
 const CONDITIONS = ['NEW', 'OPEN_BOX', 'REFURBISHED', 'USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR']
 const USED = ['USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR']
@@ -18,7 +21,8 @@ const CARD = `
          COALESCE(v.name, 'Dealker') AS owner_name, c.name AS category_name, p.category_id,
          p.thumbnail_url, COALESCE(jsonb_array_length(p.images), 0) AS image_count,
          COALESCE(sp.sale_price, sp.price) AS price, sp.mrp, sp.stock_quantity AS stock,
-         sp.approval_status, sp.listing_status, sp.rejection_reason, sp.sold_count, sp.created_at, p.sku`
+         sp.approval_status, sp.listing_status, sp.rejection_reason, sp.sold_count, sp.created_at, p.sku,
+         sp.qc_status, sp.qc_score`
 
 function toCard(r) {
   return {
@@ -32,7 +36,7 @@ export const listingsService = {
   CONDITIONS,
 
   async list(scope, q = {}) {
-    const { owner, vendorId, condition, categoryId, approval, stock, status, search, sort = 'newest', page = 1, limit = 25 } = q
+    const { owner, vendorId, condition, categoryId, approval, qc: qcFilter, stock, status, search, sort = 'newest', page = 1, limit = 25 } = q
     const where = []; const params = []
     const p = (v) => { params.push(v); return `$${params.length}` }
     if (scope.vendorId) where.push(`p.owner_vendor_id = ${p(scope.vendorId)}`)
@@ -43,6 +47,7 @@ export const listingsService = {
     if (condition) where.push(condition === 'USED' ? `p.condition = ANY(${p(USED)})` : `p.condition = ${p(condition)}`)
     if (categoryId) where.push(`p.category_id = ${p(categoryId)}`)
     if (approval) where.push(`sp.approval_status = ${p(approval)}`)
+    if (qcFilter) where.push(`sp.qc_status = ${p(qcFilter)}`)
     if (status) where.push(`sp.listing_status = ${p(status)}`)
     if (stock === 'out') where.push('sp.stock_quantity = 0')
     if (stock === 'in') where.push('sp.stock_quantity > 0')
@@ -86,7 +91,8 @@ export const listingsService = {
               sp.price AS selling_price, sp.mrp, sp.stock_quantity, sp.handling_time_days, sp.cod_eligible,
               sp.nationwide_shipping_enabled, sp.local_delivery_enabled, sp.weight_grams, sp.seller_sku, sp.sold_count, sp.created_at,
               p.name, p.brand, p.description, p.category_id, c.name AS category_name, p.images, p.thumbnail_url, p.condition, p.condition_notes,
-              p.usage_duration, p.warranty_info, p.accessories_included, p.battery_health, p.serial_number, p.has_invoice, p.hsn_code,
+              p.usage_duration, p.warranty_info, p.accessories_included, p.battery_health, p.serial_number, p.imei, p.has_invoice, p.hsn_code,
+              sp.qc_status, sp.qc_mode, sp.qc_score, sp.qc_notes, sp.qc_checked_at,
               p.gst_rate, p.specifications, p.return_policy_days, p.owner_type, p.owner_vendor_id AS vendor_id, COALESCE(v.name,'Dealker') AS owner_name
          ${BASE} AND sp.id = $1 ${scope.vendorId ? 'AND p.owner_vendor_id = $2' : ''}`, scope.vendorId ? [id, scope.vendorId] : [id])
     if (!rows[0]) throw err(404, 'Listing not found', 'NOT_FOUND')
@@ -135,13 +141,14 @@ export const listingsService = {
       const pid = (await client.query(
         `INSERT INTO products (name, slug, description, price, sale_price, category_id, stock_quantity, unit, thumbnail_url, images, is_active, sku, brand,
            hsn_code, gst_rate, specifications, return_policy_days, owner_type, owner_vendor_id, condition, condition_notes, usage_duration, warranty_info,
-           accessories_included, battery_health, serial_number, has_invoice, max_order_qty)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'pc',$8,$9,true,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) RETURNING id`,
+           accessories_included, battery_health, serial_number, has_invoice, max_order_qty, imei)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'pc',$8,$9,true,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) RETURNING id`,
         [input.name.trim(), `${slugify(input.name)}-${Math.random().toString(36).slice(2, 7)}`, input.description || null, input.mrp ?? input.price, input.price,
           input.categoryId, input.stock, input.images[0], JSON.stringify(input.images), input.sku || null, input.brand || null,
           input.hsnCode || null, input.gstRate ?? null, JSON.stringify(input.specifications || {}), input.returnPolicyDays ?? 7, ownerType, vendorId,
           input.condition, input.conditionNotes || null, input.usageDuration || null, input.warrantyInfo || null, input.accessoriesIncluded || null,
-          input.batteryHealth ?? null, input.serialNumber || null, Boolean(input.hasInvoice), USED.includes(input.condition) ? 1 : 10])).rows[0].id
+          input.batteryHealth ?? null, input.serialNumber || null, Boolean(input.hasInvoice), USED.includes(input.condition) ? 1 : 10,
+          input.imei ? String(input.imei).replace(/[\s-]/g, '') : null])).rows[0].id
       const spId = (await client.query(
         `INSERT INTO shop_products (shop_id, product_id, price, sale_price, mrp, stock_quantity, low_stock_threshold, max_order_qty, is_available, approval_status,
            approved_at, approved_by, seller_sku, min_order_qty, handling_time_days, weight_grams, cod_eligible, nationwide_shipping_enabled, local_delivery_enabled, listing_status)
@@ -151,6 +158,7 @@ export const listingsService = {
           input.weightGrams ?? null, input.codEligible ?? true, input.nationwide ?? true, input.localDelivery ?? true,
           Number(input.stock) > 0 ? 'ACTIVE' : 'OUT_OF_STOCK'])).rows[0].id
       await client.query('COMMIT')
+      await qc.autoIfEnabled(spId)
       return this.detail(spId, { vendorId: null })
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {})
@@ -161,7 +169,7 @@ export const listingsService = {
   async update(id, input, scope) {
     this.validate(input, { partial: true })
     const cur = await this.detail(id, scope)
-    const contentKeys = ['name', 'description', 'images', 'condition', 'conditionNotes', 'usageDuration', 'warrantyInfo', 'accessoriesIncluded', 'batteryHealth', 'categoryId', 'brand', 'serialNumber']
+    const contentKeys = ['name', 'description', 'images', 'condition', 'conditionNotes', 'usageDuration', 'warrantyInfo', 'accessoriesIncluded', 'batteryHealth', 'categoryId', 'brand', 'serialNumber', 'imei']
     const contentChanged = contentKeys.some((k) => input[k] !== undefined)
     const cond = input.condition ?? cur.condition
     if (USED.includes(cond) && Number(input.stock ?? cur.stock_quantity) > 1) throw err(400, 'Used items are single-unit listings (quantity 1)', 'VALIDATION_ERROR')
@@ -172,8 +180,11 @@ export const listingsService = {
       const set = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length}`) }
       const map = { name: 'name', description: 'description', categoryId: 'category_id', brand: 'brand', condition: 'condition', conditionNotes: 'condition_notes',
         usageDuration: 'usage_duration', warrantyInfo: 'warranty_info', accessoriesIncluded: 'accessories_included', batteryHealth: 'battery_health',
-        serialNumber: 'serial_number', hasInvoice: 'has_invoice', hsnCode: 'hsn_code', gstRate: 'gst_rate', returnPolicyDays: 'return_policy_days' }
-      for (const [k, col] of Object.entries(map)) if (input[k] !== undefined) set(col, input[k])
+        serialNumber: 'serial_number', imei: 'imei', hasInvoice: 'has_invoice', hsnCode: 'hsn_code', gstRate: 'gst_rate', returnPolicyDays: 'return_policy_days' }
+      for (const [k, col] of Object.entries(map)) {
+        if (input[k] === undefined) continue
+        set(col, k === 'imei' && input[k] ? String(input[k]).replace(/[\s-]/g, '') : input[k])
+      }
       if (input.images !== undefined) { set('images', JSON.stringify(input.images)); set('thumbnail_url', input.images[0]) }
       if (input.specifications !== undefined) set('specifications', JSON.stringify(input.specifications))
       if (input.price !== undefined) { set('sale_price', input.price); if (input.mrp === undefined && cur.mrp == null) set('price', input.price) }
@@ -203,10 +214,20 @@ export const listingsService = {
       await client.query('ROLLBACK').catch(() => {})
       throw e
     } finally { client.release() }
+    if (contentChanged) {
+      // an earlier QC decision describes the old content
+      await qc.reset(id).catch(() => {})
+      await qc.autoIfEnabled(id)
+    }
     return this.detail(id, scope)
   },
 
   async approve(id, actorId) {
+    const qcSettings = await qc.getSettings()
+    if (qcSettings.requirePassToPublish) {
+      const { rows } = await query(`SELECT qc_status FROM shop_products WHERE id = $1 AND deleted_at IS NULL`, [id])
+      if (rows[0] && rows[0].qc_status !== 'QC_PASSED') throw err(409, 'QC must pass before this listing can be approved', 'QC_NOT_PASSED')
+    }
     const { rowCount } = await query(
       `UPDATE shop_products SET approval_status='APPROVED', approved_at=NOW(), approved_by=$2, rejection_reason=NULL, updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, [id, actorId])
     if (!rowCount) throw err(404, 'Listing not found', 'NOT_FOUND')

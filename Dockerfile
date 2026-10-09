@@ -19,8 +19,9 @@ COPY . .
 # Remove dev files
 RUN rm -rf .env .env.example tests/ .github/ .vscode/ *.md
 
-# Upload directory (mounted as a volume in compose)
-RUN mkdir -p /app/uploads
+# Upload directories (mounted as volumes in compose). private-uploads holds
+# seller invoices and is never served publicly.
+RUN mkdir -p /app/uploads /app/private-uploads
 
 # Set ownership
 RUN chown -R appuser:appgroup /app
