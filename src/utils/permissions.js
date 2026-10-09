@@ -144,7 +144,13 @@ const CANONICAL_PERMISSION_LIST = Object.freeze([
   'fulfilment.manage',
   'riders.manage',
   // ── Orders ────────────────────────────────────────────────────────────
+  'orders.view',
+  'reviews.view',
+  'reviews.moderate',
+  'abandoned_carts.view',
+  'abandoned_carts.manage',
   'orders.update',
+  'orders.override',
   // ── Reports ────────────────────────────────────────────────────────────
   'reports.view',
   // ── Marketplace (Dealker) ──────────────────────────────────────────────
@@ -172,6 +178,13 @@ const CANONICAL_PERMISSION_LIST = Object.freeze([
   'pricing.manage',
   'merchandising.view',
   'merchandising.manage',
+  'subscriptions.view',
+  'subscriptions.manage',
+  'alerts.view',
+  'alerts.manage',
+  'campaigns.view',
+  'campaigns.manage',
+  'dashboard.view',
   'shipping.view',
   'shipping.manage',
   'shipping_providers.manage',

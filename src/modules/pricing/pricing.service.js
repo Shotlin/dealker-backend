@@ -23,9 +23,9 @@ function cleanScope(scope = {}) {
   const s = {
     all: scope.all === true,
     vendorIds: arr(scope.vendorIds), categoryIds: arr(scope.categoryIds), brands: arr(scope.brands).map(String),
-    listingIds: arr(scope.listingIds), owner: scope.owner || null, channel: scope.channel || null,
+    listingIds: arr(scope.listingIds), excludeListingIds: arr(scope.excludeListingIds), owner: scope.owner || null, channel: scope.channel || null,
   }
-  for (const k of ['vendorIds', 'categoryIds', 'listingIds']) {
+  for (const k of ['vendorIds', 'categoryIds', 'listingIds', 'excludeListingIds']) {
     if (s[k].some((id) => !UUID.test(String(id)))) throw httpError(400, `${k} must contain valid ids`, 'VALIDATION')
   }
   if (s.listingIds.length > MAX_ROWS) throw httpError(400, `Select at most ${MAX_ROWS} listings at a time`, 'VALIDATION')
@@ -44,6 +44,7 @@ function scopeWhere(s) {
   if (s.categoryIds.length) where.push(`p.category_id = ANY(${p(s.categoryIds)}::uuid[])`)
   if (s.brands.length) where.push(`lower(p.brand) = ANY(${p(s.brands.map((b) => b.toLowerCase()))}::text[])`)
   if (s.listingIds.length) where.push(`sp.id = ANY(${p(s.listingIds)}::uuid[])`)
+  if (s.excludeListingIds.length) where.push(`NOT (sp.id = ANY(${p(s.excludeListingIds)}::uuid[]))`)
   if (s.owner) where.push(`p.owner_type = ${p(s.owner)}`)
   if (s.channel === 'B2C') where.push('sp.sell_b2c = TRUE')
   if (s.channel === 'B2B') where.push('sp.sell_b2b = TRUE')
@@ -56,6 +57,15 @@ const ROWS_SQL = `
     FROM shop_products sp JOIN products p ON p.id = sp.product_id`
 
 export class PricingService {
+  /** Listing ids a scope matches (used by campaigns for section placement). */
+  async resolveScope(scope) {
+    const s = cleanScope(scope)
+    const w = scopeWhere(s)
+    const { rows } = await query(`SELECT sp.id FROM shop_products sp JOIN products p ON p.id = sp.product_id WHERE ${w.clause} LIMIT ${MAX_ROWS + 1}`, w.params)
+    if (rows.length > MAX_ROWS) throw httpError(400, `This touches more than ${MAX_ROWS} listings — narrow the scope`, 'TOO_MANY')
+    return rows.map((r) => r.id)
+  }
+
   async brands() {
     const { rows } = await query(
       `SELECT p.brand, COUNT(*)::int AS listings FROM shop_products sp JOIN products p ON p.id = sp.product_id

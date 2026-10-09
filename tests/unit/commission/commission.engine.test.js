@@ -31,6 +31,17 @@ describe('resolveRule', () => {
   })
 })
 
+describe('legacy fallback rule', () => {
+  it('a real rule always beats the shop\'s old flat rate, even a GLOBAL one', () => {
+    const rules = [
+      rule({ id: 'legacy', scope: 'GLOBAL', commission_pct: 10, fallback: true }),
+      rule({ id: 'real', scope: 'GLOBAL', commission_pct: 4 }),
+    ]
+    expect(resolveRule(rules, { channel: 'B2C' }).id).toBe('real')
+    expect(resolveRule([rules[0]], { channel: 'B2C' }).id).toBe('legacy') // used only when nothing else matches
+  })
+})
+
 describe('feesForAmount', () => {
   it('5% commission on ₹50,000 with 2% platform charge and 18% tax on fees', () => {
     const f = feesForAmount(50000, rule({ commission_pct: 5, platform_charge_pct: 2, tax_pct: 18 }))

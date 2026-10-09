@@ -86,6 +86,16 @@ export async function startWorkerRuntime() {
   // Auction worker — starts/closes auctions on time, sweeps payment deadlines.
   startAuctionWorker(createAuctionProcessor())
 
+  // Subscription sweeper — expires lapsed plans, warns before expiry.
+  const { startSubscriptionSweeper } = await import('../workers/subscription.worker.js')
+  startSubscriptionSweeper()
+
+  // Promo campaigns — starts/ends scheduled discounts and sections on time.
+  const { startPromoCampaignWorker } = await import('../workers/promo-campaign.worker.js')
+  startPromoCampaignWorker()
+  const { startAlertSweeper } = await import('../workers/alert-sweep.worker.js')
+  startAlertSweeper()
+
   // Event-loop blocking detector (task 13.6) — logs warning when
   // the event loop is blocked for >100ms.
   startEventLoopMonitor()

@@ -9,6 +9,9 @@ import { ShiprocketOrdersService } from './modules/shiprocket/shiprocket.orders.
 import { startCampaignScheduler, stopCampaignScheduler } from './workers/campaign-scheduler.worker.js'
 import { startPaymentExpiryWorker, stopPaymentExpiryWorker } from './workers/payment-expiry.worker.js'
 import { startAbandonedCartWorker, stopAbandonedCartWorker } from './workers/abandoned-cart.worker.js'
+import { startSubscriptionSweeper } from './workers/subscription.worker.js'
+import { startPromoCampaignWorker } from './workers/promo-campaign.worker.js'
+import { startAlertSweeper } from './workers/alert-sweep.worker.js'
 import {
   startWalletTopupReconciliationWorker,
   stopWalletTopupReconciliationWorker,
@@ -70,6 +73,10 @@ const start = async () => {
 
     // Start payment expiry worker (cleans up abandoned 15-min payment windows)
     startPaymentExpiryWorker()
+    // Idempotent clocks (atomic claims) — safe even if a separate worker process also runs them.
+    startSubscriptionSweeper()
+    startPromoCampaignWorker()
+    startAlertSweeper()
 
     // Start abandoned-cart sweep (detects idle carts; pushes live updates to the dashboard)
     startAbandonedCartWorker(app)

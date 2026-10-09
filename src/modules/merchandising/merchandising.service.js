@@ -19,6 +19,7 @@ export const SECTIONS = {
   CLEARANCE_SALE: 'Clearance Sale',
   FEATURED: 'Featured',
   BEST_SELLER: 'Best Seller',
+  FLASH_SALE: 'Flash Sale',
 }
 const MAX_IDS = 200
 const BULK_ACTIONS = ['APPROVE', 'PAUSE', 'RESUME', 'DELETE']

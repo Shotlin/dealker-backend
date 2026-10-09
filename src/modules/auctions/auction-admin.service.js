@@ -133,7 +133,21 @@ export async function createAuction(actor, input) {
       WHERE product_id = $1 AND deleted_at IS NULL ORDER BY stock_quantity DESC LIMIT 1`, [p.id]
   )
   if (!sp[0]) throw new AuctionError('PRODUCT_NOT_LISTED', 'This product is not listed in any shop', 409)
-  if (Number(sp[0].stock_quantity) < 1) throw new AuctionError('OUT_OF_STOCK', 'This product is out of stock', 409)
+  const audience = input.audience === 'B2B' ? 'B2B' : 'B2C'
+  const quantity = audience === 'B2B' ? Number(input.quantity ?? 1) : 1
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000) throw new AuctionError('VALIDATION', 'Quantity must be a whole number of 1 or more', 422)
+  if (audience === 'B2C' && input.quantity != null && Number(input.quantity) !== 1) throw new AuctionError('VALIDATION', 'Customer auctions sell one unit — use a business (B2B) auction for lots', 422)
+  if (Number(sp[0].stock_quantity) < quantity) {
+    throw new AuctionError('OUT_OF_STOCK', quantity > 1 ? `Only ${sp[0].stock_quantity} in stock — a lot of ${quantity} needs more` : 'This product is out of stock', 409)
+  }
+  let eligibleVendors = null
+  if (audience === 'B2B' && Array.isArray(input.eligibleVendorIds) && input.eligibleVendorIds.length) {
+    if (!isAdmin(actor)) throw new AuctionError('FORBIDDEN', 'Only admins can invite specific vendors', 403)
+    const ids = [...new Set(input.eligibleVendorIds.map(String))]
+    const { rows: found } = await query(`SELECT id FROM vendors WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`, [ids])
+    if (found.length !== ids.length) throw new AuctionError('VALIDATION', 'One of the invited vendors does not exist', 422)
+    eligibleVendors = ids
+  }
 
   const n = normalise(input, settings)
   if (!input.saveAsDraft && n.endsAt <= new Date()) throw new AuctionError('VALIDATION', 'End time must be in the future', 422)
@@ -163,8 +177,9 @@ export async function createAuction(actor, input) {
            auction_number, product_id, shop_product_id, shop_id, vendor_id, owner_type, created_by, created_by_role,
            title, description, image_url, images, status, start_price, reserve_price, bid_increment, increment_tiers, buy_now_price,
            registration_fee, fee_vendor_share_pct, loser_fee_refund_pct, anti_snipe_window_sec, anti_snipe_extend_sec,
-           max_extensions, payment_window_hours, max_offer_rounds, starts_at, ends_at, original_ends_at, current_price, relisted_from)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$28,$14,$29)
+           max_extensions, payment_window_hours, max_offer_rounds, starts_at, ends_at, original_ends_at, current_price, relisted_from,
+           audience, quantity, eligible_vendor_ids)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$28,$14,$29,$30,$31,$32)
          RETURNING *`,
         [
           genNumber(), p.id, sp[0].id, sp[0].shop_id, p.owner_vendor_id || null, p.owner_type, actor.userId, actor.kind,
@@ -178,6 +193,7 @@ export async function createAuction(actor, input) {
           admin && input.maxExtensions != null ? Number(input.maxExtensions) : settings.max_extensions,
           admin && input.paymentWindowHours != null ? Number(input.paymentWindowHours) : settings.payment_window_hours,
           settings.max_offer_rounds, n.startsAt, n.endsAt, input.relistedFrom || null,
+          audience, quantity, eligibleVendors,
         ]
       )
       row = rows[0]
@@ -219,6 +235,21 @@ export async function updateAuction(actor, id, input) {
     if (input.description !== undefined) set('description', input.description)
     if (input.imageUrl !== undefined) set('image_url', input.imageUrl)
     if (input.images !== undefined) set('images', JSON.stringify(input.images))
+    if (input.quantity !== undefined) {
+      const qty = Number(input.quantity)
+      if (a.audience !== 'B2B' && qty !== 1) throw new AuctionError('VALIDATION', 'Customer auctions sell one unit', 422)
+      if (!Number.isInteger(qty) || qty < 1 || qty > 100000) throw new AuctionError('VALIDATION', 'Quantity must be a whole number of 1 or more', 422)
+      if (a.stock_reserved && qty !== Number(a.quantity)) throw new AuctionError('QUANTITY_LOCKED', 'The lot size cannot change once stock is set aside — cancel and relist instead', 409)
+      set('quantity', qty)
+    }
+    if (input.eligibleVendorIds !== undefined && isAdmin(actor) && a.audience === 'B2B') {
+      const ids = Array.isArray(input.eligibleVendorIds) ? [...new Set(input.eligibleVendorIds.map(String))] : []
+      if (ids.length) {
+        const { rows: found } = await client.query(`SELECT id FROM vendors WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`, [ids])
+        if (found.length !== ids.length) throw new AuctionError('VALIDATION', 'One of the invited vendors does not exist', 422)
+      }
+      set('eligible_vendor_ids', ids.length ? ids : null)
+    }
 
     const touchesRules = [...pricingKeys, 'endsAt', 'durationHours'].some((k) => input[k] !== undefined)
     if (touchesRules) {
@@ -394,6 +425,7 @@ export async function relist(actor, id, { startsAt, endsAt, durationHours } = {}
     registrationFee: Number(a.registration_fee),
     startsAt: startsAt || new Date(Date.now() + 5 * 60000).toISOString(),
     endsAt, durationHours: endsAt ? undefined : (durationHours || 24),
+    audience: a.audience, quantity: Number(a.quantity), eligibleVendorIds: a.eligible_vendor_ids || undefined,
     relistedFrom: a.id, saveAsDraft: true,
   })
 }
@@ -406,12 +438,13 @@ const scopeClause = (actor, params, alias = 'a') => {
   return ` AND ${alias}.vendor_id = $${params.length}`
 }
 
-export async function listManage(actor, { status = '', q = '', ownerType = '', page = 1, limit = 20 } = {}) {
+export async function listManage(actor, { status = '', q = '', ownerType = '', audience = '', page = 1, limit = 20 } = {}) {
   const params = []
   const where = ['1=1']
   if (status) { params.push(String(status).split(',')); where.push(`a.status = ANY($${params.length})`) }
   if (q) { params.push(`%${q}%`); where.push(`(a.title ILIKE $${params.length} OR a.auction_number ILIKE $${params.length})`) }
   if (ownerType) { params.push(ownerType); where.push(`a.owner_type = $${params.length}`) }
+  if (audience === 'B2B' || audience === 'B2C') { params.push(audience); where.push(`a.audience = $${params.length}`) }
   const scope = scopeClause(actor, params)
   const base = `FROM auctions a LEFT JOIN vendors v ON v.id = a.vendor_id WHERE ${where.join(' AND ')}${scope}`
   const offset = (Math.max(1, page) - 1) * limit
@@ -662,3 +695,53 @@ export async function unblockBidder(actor, userId) {
   return { user_id: userId, is_blocked: false }
 }
 
+
+/**
+ * Auction orders: Winner → Order created → Payment → QC → Shipping → Delivered,
+ * for B2C and B2B auctions separately.
+ */
+export async function listOrders(actor, { audience = '', status = '', q = '', page = 1, limit = 20 } = {}) {
+  const params = []
+  const where = [`a.winner_id IS NOT NULL`]
+  if (audience === 'B2B' || audience === 'B2C') { params.push(audience); where.push(`a.audience = $${params.length}`) }
+  if (q) { params.push(`%${q}%`); where.push(`(a.title ILIKE $${params.length} OR a.auction_number ILIKE $${params.length} OR o.order_number ILIKE $${params.length})`) }
+  if (status === 'AWAITING_PAYMENT') where.push(`a.status = 'AWAITING_PAYMENT'`)
+  else if (status === 'IN_PROGRESS') where.push(`o.id IS NOT NULL AND o.status NOT IN ('DELIVERED','COMPLETED','CANCELLED','REFUNDED')`)
+  else if (status === 'DELIVERED') where.push(`o.status IN ('DELIVERED','COMPLETED')`)
+  else if (status === 'PROBLEM') where.push(`(a.status = 'DEFAULTED' OR o.status IN ('CANCELLED','REFUNDED'))`)
+  const scope = scopeClause(actor, params)
+  const base = `FROM auctions a
+      JOIN users u ON u.id = a.winner_id
+      LEFT JOIN orders o ON o.id = a.order_id
+      LEFT JOIN products p ON p.id = a.product_id
+      LEFT JOIN shop_products sp ON sp.id = a.shop_product_id
+      WHERE ${where.join(' AND ')}${scope}`
+  const offset = (Math.max(1, page) - 1) * limit
+  const [rows, count] = await Promise.all([
+    query(
+      `SELECT a.id, a.auction_number, a.title, a.audience, a.quantity, a.winning_bid, a.amount_due, a.status AS auction_status, a.ended_at, a.payment_deadline,
+              u.name AS winner_name, u.phone AS winner_phone, o.id AS order_id, o.order_number, o.status AS order_status, o.payment_status,
+              sp.qc_status, (SELECT MIN(so.shipped_at) FROM seller_orders so WHERE so.order_id = o.id) AS shipped_at, o.delivered_at,
+              (SELECT string_agg(DISTINCT vv.name, ', ') FROM seller_orders so JOIN vendors vv ON vv.id = so.vendor_id WHERE so.order_id = o.id) AS seller_name
+         ${base} ORDER BY COALESCE(a.ended_at, a.updated_at) DESC LIMIT ${Number(limit)} OFFSET ${Number(offset)}`, params),
+    query(`SELECT COUNT(*)::int AS n ${base}`, params),
+  ])
+  const data = rows.rows.map((r) => {
+    const paid = ['PAID', 'PARTIALLY_PAID'].includes(r.payment_status)
+    const delivered = ['DELIVERED', 'COMPLETED'].includes(r.order_status)
+    const stages = [
+      { key: 'WINNER', label: 'Winner', done: true },
+      { key: 'ORDER', label: 'Order created', done: !!r.order_id },
+      { key: 'PAYMENT', label: 'Payment', done: paid },
+      { key: 'QC', label: 'QC', done: r.qc_status === 'QC_PASSED' },
+      { key: 'SHIPPING', label: 'Shipping', done: !!r.shipped_at || delivered },
+      { key: 'DELIVERED', label: 'Delivered', done: delivered },
+    ]
+    return {
+      ...r, winning_bid: Number(r.winning_bid), amount_due: Number(r.amount_due), quantity: Number(r.quantity || 1),
+      unit_price: Number(r.quantity) > 1 ? Math.round((Number(r.winning_bid) / Number(r.quantity)) * 100) / 100 : null,
+      stages, current: (stages.find((s) => !s.done) || { key: 'DELIVERED' }).key,
+    }
+  })
+  return { success: true, data, pagination: { page, limit, total: count.rows[0].n } }
+}

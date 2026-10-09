@@ -52,7 +52,9 @@ export async function checkout(userId, auctionId, { addressId, paymentMethod = '
     const { rows: shopRows } = await client.query('SELECT vendor_id, commission_rate FROM shops WHERE id = $1', [a.shop_id])
     const shop = shopRows[0] || {}
 
-    const subtotal = Number(a.winning_bid)
+    const subtotal = Number(a.winning_bid)          // the whole lot for a B2B auction
+    const lotQty = Number(a.quantity || 1)
+    const channel = a.audience === 'B2B' ? 'B2B' : 'B2C'
     const feeCredit = Number(a.fee_credit)
     const amountDue = Number(a.amount_due)
     const payWithWallet = paymentMethod === 'WALLET'
@@ -73,8 +75,8 @@ export async function checkout(userId, auctionId, { addressId, paymentMethod = '
       productId: a.product_id,
       shopProductId: a.shop_product_id,
       name: a.title || p?.name,
-      price: subtotal,
-      quantity: 1,
+      price: lotQty > 1 ? Number((subtotal / lotQty).toFixed(2)) : subtotal,
+      quantity: lotQty,
       total: subtotal,
       thumbnailUrl: a.image_url || p?.thumbnail_url || null,
       pricingMode: 'retail',
@@ -104,7 +106,7 @@ export async function checkout(userId, auctionId, { addressId, paymentMethod = '
       walletAmount: payWithWallet ? amountDue : 0,
       walletDebited: payWithWallet,
     })
-    await client.query('UPDATE orders SET auction_id = $2 WHERE id = $1', [parent.id, a.id])
+    await client.query('UPDATE orders SET auction_id = $2, order_channel = $3 WHERE id = $1', [parent.id, a.id, channel])
 
     if (payWithWallet && amountDue > 0) {
       await walletRepo.debit(
@@ -113,8 +115,14 @@ export async function checkout(userId, auctionId, { addressId, paymentMethod = '
       )
     }
 
-    const commissionRate = Number(shop.commission_rate || 0)
-    const commissionAmount = Number(((subtotal * commissionRate) / 100).toFixed(2))
+    // Same commission engine as normal checkout (vendor / category / product rules, B2C or B2B).
+    const { CommissionService } = await import('../commission/commission.service.js')
+    const fees = await new CommissionService().forCheckoutGroup(client, {
+      vendorId: shop.vendor_id || a.vendor_id || null, shopCommissionRate: shop.commission_rate,
+      items: [{ productId: a.product_id, total: subtotal }], discount: 0, shippingCharge: 0, channel,
+    })
+    const commissionRate = fees.effectiveRate
+    const commissionAmount = fees.commission
     const suffix = await ordersRepo.nextSellerOrderSuffix(client, parent.id)
     const sellerOrder = await ordersRepo.createSellerOrder(client, {
       orderId: parent.id,
@@ -127,8 +135,12 @@ export async function checkout(userId, auctionId, { addressId, paymentMethod = '
       platformDiscount: 0,
       commissionRate,
       commissionAmount,
+      platformCharge: fees.platformCharge,
+      feeTaxAmount: fees.tax,
+      feeBreakdown: { sellingPrice: fees.sellingPrice, lines: fees.lines },
+      channel,
       shippingCharge: 0,
-      payableToSeller: Number((subtotal - commissionAmount).toFixed(2)),
+      payableToSeller: Math.max(0, Number((fees.sellingPrice - fees.commission - fees.platformCharge - fees.tax).toFixed(2))),
     })
     await ordersRepo.createCheckoutOrder(client, {
       itemsOnly: true,

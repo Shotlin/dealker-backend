@@ -551,6 +551,31 @@ export const buildApp = async () => {
   await app.register(adminMerchandisingRoutes, { prefix: "/api/v1/admin/merchandising" });
   await app.register(publicSectionRoutes, { prefix: "/api/v1/discovery/sections" });
 
+  // Vendor subscriptions + timeline
+  const { adminSubscriptionsRoutes, vendorSubscriptionsRoutes } = await import("./modules/subscriptions/subscriptions.routes.js");
+  await app.register(adminSubscriptionsRoutes, { prefix: "/api/v1/admin/subscriptions" });
+  await app.register(vendorSubscriptionsRoutes, { prefix: "/api/v1/subscriptions" });
+
+  // Promotional campaigns (flash sale, deal of the day, clearance, coupons…)
+  const { adminCampaignsRoutes } = await import("./modules/promo-campaigns/campaigns.routes.js");
+  await app.register(adminCampaignsRoutes, { prefix: "/api/v1/admin/campaigns" });
+
+  // Command centre — the 30-widget main dashboard
+  const { adminCommandCenterRoutes } = await import("./modules/command-center/command-center.routes.js");
+  await app.register(adminCommandCenterRoutes, { prefix: "/api/v1/admin/command-center" });
+
+  // Notification centre (alerts feed + Notification Control)
+  const { adminAlertsRoutes } = await import("./modules/alerts/alerts.routes.js");
+  await app.register(adminAlertsRoutes, { prefix: "/api/v1/admin/alerts" });
+
+  // Order stage timeline + manual override
+  const { adminOrderStagesRoutes } = await import("./modules/order-stages/order-stages.routes.js");
+  await app.register(adminOrderStagesRoutes, { prefix: "/api/v1/admin/order-stages" });
+
+  // B2B abandoned carts + follow-ups
+  const { adminAbandonedB2bRoutes } = await import("./modules/abandoned-b2b/abandoned-b2b.routes.js");
+  await app.register(adminAbandonedB2bRoutes, { prefix: "/api/v1/admin/abandoned-b2b" });
+
   // Marketplace Catalog — location-first discovery/ranking + seller-listing moderation
   const { publicDiscoveryRoutes, adminSellerListingsRoutes } = await import(
     "./modules/marketplace-catalog/marketplace-catalog.routes.js"

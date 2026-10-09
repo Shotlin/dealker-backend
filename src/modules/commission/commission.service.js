@@ -180,7 +180,7 @@ export class CommissionService {
    * Used by checkout. Falls back to the shop's legacy `commission_rate`
    * when no rule matches so existing vendors keep their current economics.
    */
-  async forCheckoutGroup(client, { vendorId, shopCommissionRate, items, discount, shippingCharge }) {
+  async forCheckoutGroup(client, { vendorId, shopCommissionRate, items, discount, shippingCharge, channel = 'B2C' }) {
     const rules = await this.loadActiveRules(client)
     const ids = items.map((i) => i.productId).filter(Boolean)
     const catByProduct = new Map()
@@ -190,17 +190,18 @@ export class CommissionService {
     }
     const subtotal = items.reduce((s, i) => s + Number(i.total), 0)
     const effectiveRules = rules.length ? rules : []
-    // Legacy per-shop rate acts as a VENDOR-level fallback beneath any real rule.
-    if (Number(shopCommissionRate) > 0) {
+    // The shop's old flat commission_rate is only a last-resort fallback for B2C sales:
+    // any real rule (global, category, vendor, product) wins. B2B pricing has its own rules.
+    if (Number(shopCommissionRate) > 0 && channel !== 'B2B') {
       effectiveRules.push({
-        id: null, scope: vendorId ? 'VENDOR' : 'GLOBAL', vendor_id: vendorId || null, channel: 'ALL', is_active: true,
+        id: null, scope: 'GLOBAL', vendor_id: null, channel: 'ALL', is_active: true, fallback: true,
         commission_pct: shopCommissionRate, platform_charge_flat: 0, platform_charge_pct: 0, tax_pct: 0,
       })
     }
     return calculateSellerOrder({
       rules: effectiveRules,
       vendorId,
-      channel: 'B2C',
+      channel: channel === 'B2B' ? 'B2B' : 'B2C',
       shippingCharge: 0,
       items: items.map((i) => ({
         productId: i.productId,

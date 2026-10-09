@@ -1,7 +1,9 @@
 import { query, getClient } from '../../config/database.js'
 import { QcService } from '../qc/qc.service.js'
+import { SubscriptionsService } from '../subscriptions/subscriptions.service.js'
 
 const qc = new QcService()
+const subscriptions = new SubscriptionsService()
 
 const CONDITIONS = ['NEW', 'OPEN_BOX', 'REFURBISHED', 'USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR']
 const USED = ['USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR']
@@ -22,7 +24,7 @@ const CARD = `
          p.thumbnail_url, COALESCE(jsonb_array_length(p.images), 0) AS image_count,
          COALESCE(sp.sale_price, sp.price) AS price, sp.mrp, sp.stock_quantity AS stock,
          sp.approval_status, sp.listing_status, sp.rejection_reason, sp.sold_count, sp.created_at, p.sku,
-         sp.qc_status, sp.qc_score`
+         sp.qc_status, sp.qc_score, sp.merch_section, sp.sell_b2c, sp.sell_b2b`
 
 function toCard(r) {
   return {
@@ -36,7 +38,7 @@ export const listingsService = {
   CONDITIONS,
 
   async list(scope, q = {}) {
-    const { owner, vendorId, condition, categoryId, approval, qc: qcFilter, stock, status, search, sort = 'newest', page = 1, limit = 25 } = q
+    const { owner, vendorId, condition, categoryId, approval, qc: qcFilter, section, channel, stock, status, search, sort = 'newest', page = 1, limit = 25 } = q
     const where = []; const params = []
     const p = (v) => { params.push(v); return `$${params.length}` }
     if (scope.vendorId) where.push(`p.owner_vendor_id = ${p(scope.vendorId)}`)
@@ -48,6 +50,9 @@ export const listingsService = {
     if (categoryId) where.push(`p.category_id = ${p(categoryId)}`)
     if (approval) where.push(`sp.approval_status = ${p(approval)}`)
     if (qcFilter) where.push(`sp.qc_status = ${p(qcFilter)}`)
+    if (section) where.push(section === 'NONE' ? 'sp.merch_section IS NULL' : `sp.merch_section = ${p(section)}`)
+    if (channel === 'B2C') where.push('sp.sell_b2c = TRUE')
+    if (channel === 'B2B') where.push('sp.sell_b2b = TRUE')
     if (status) where.push(`sp.listing_status = ${p(status)}`)
     if (stock === 'out') where.push('sp.stock_quantity = 0')
     if (stock === 'in') where.push('sp.stock_quantity > 0')
@@ -124,6 +129,7 @@ export const listingsService = {
       await client.query('BEGIN')
       let shopId; let ownerType; let vendorId = null; let approval = 'PENDING'
       if (scope.vendorId) {
+        await subscriptions.assertCanList(scope.vendorId) // plan listing limit
         ownerType = 'VENDOR'; vendorId = scope.vendorId
         const s = await client.query(`SELECT s.id FROM shops s JOIN vendors v ON v.id = s.vendor_id WHERE s.vendor_id = $1 AND s.is_active = true AND s.deleted_at IS NULL ORDER BY s.created_at LIMIT 1`, [vendorId])
         if (!s.rows[0]) throw err(409, 'Your store is not active yet — complete KYC first', 'NO_ACTIVE_SHOP')

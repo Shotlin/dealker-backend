@@ -178,10 +178,14 @@ export async function auctionManageRoutes(fastify) {
   })))
 
   fastify.get('/', { preHandler: pre(guard('auctions.view')) }, wrap(async (request) => {
-    const { status = '', q = '', ownerType = '', page = 1, limit = 20 } = request.query || {}
+    const { status = '', q = '', ownerType = '', audience = '', page = 1, limit = 20 } = request.query || {}
     return admin.listManage(actorOf(request), {
-      status, q: String(q).slice(0, 100), ownerType, page: Math.max(1, Number(page)), limit: Math.min(100, Number(limit) || 20),
+      status, q: String(q).slice(0, 100), ownerType, audience: String(audience).toUpperCase(), page: Math.max(1, Number(page)), limit: Math.min(100, Number(limit) || 20),
     })
+  }))
+  fastify.get('/orders', { preHandler: pre(guard('auctions.view')) }, wrap(async (request) => {
+    const { audience = '', status = '', q = '', page = 1, limit = 20 } = request.query || {}
+    return admin.listOrders(actorOf(request), { audience: String(audience).toUpperCase(), status: String(status), q: String(q).slice(0, 100), page: Math.max(1, Number(page)), limit: Math.min(100, Number(limit) || 20) })
   }))
   fastify.get('/:id', { preHandler: pre(guard('auctions.view')), schema: params }, wrap(async (request) => ({
     success: true, data: await admin.getManage(actorOf(request), request.params.id),

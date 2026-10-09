@@ -37,8 +37,23 @@ async function assertEligible(client, userId, a, settings) {
   )
   const u = users[0]
   if (!u || u.is_active === false || u.is_blocked) throw new AuctionError('ACCOUNT_RESTRICTED', 'Your account cannot take part in auctions', 403)
-  if (u.role !== 'CUSTOMER' || u.platform_role) {
-    throw new AuctionError('STAFF_CANNOT_BID', 'Staff accounts cannot take part in auctions', 403)
+
+  // A vendor bidder = a user linked to an active, verified vendor. B2B auctions are for them only;
+  // B2C auctions are for customers only.
+  const { rows: links } = await client.query(
+    `SELECT vu.vendor_id, v.status FROM vendor_users vu JOIN vendors v ON v.id = vu.vendor_id
+      WHERE vu.user_id = $1 AND vu.is_active = TRUE AND vu.deleted_at IS NULL AND v.deleted_at IS NULL`, [userId])
+  const verified = links.filter((l) => ['VERIFIED', 'ACTIVE'].includes(l.status))
+  if (a.audience === 'B2B') {
+    if (u.platform_role) throw new AuctionError('STAFF_CANNOT_BID', 'Staff accounts cannot take part in auctions', 403)
+    if (!verified.length) throw new AuctionError('VENDORS_ONLY', 'This is a business (B2B) auction for verified vendors only', 403)
+    if (a.eligible_vendor_ids?.length && !verified.some((l) => a.eligible_vendor_ids.includes(l.vendor_id))) {
+      throw new AuctionError('NOT_INVITED', 'This business auction is by invitation only', 403)
+    }
+  } else {
+    if (u.role !== 'CUSTOMER' || u.platform_role) {
+      throw new AuctionError('STAFF_CANNOT_BID', 'Staff accounts cannot take part in auctions', 403)
+    }
   }
 
   const { rows: prof } = await client.query('SELECT is_blocked, blocked_reason FROM auction_bidder_profiles WHERE user_id = $1', [userId])
@@ -52,6 +67,9 @@ async function assertEligible(client, userId, a, settings) {
     if (rows[0]) throw new AuctionError('OWN_AUCTION', 'You cannot bid on your own auction', 403)
   }
   if (a.created_by === userId) throw new AuctionError('OWN_AUCTION', 'You cannot bid on your own auction', 403)
+  if (a.audience !== 'B2B' && links.length) {
+    throw new AuctionError('CUSTOMERS_ONLY', 'This auction is for customers. Vendors can bid in business (B2B) auctions.', 403)
+  }
 
   if (settings.blocked_states?.length) {
     const { rows } = await client.query(
@@ -105,10 +123,20 @@ async function hydrate(rows, userId) {
 
 // ── browse ──────────────────────────────────────────────────────────────
 
+/** Vendor accounts see business (B2B) auctions; everyone else sees customer (B2C) auctions. */
+async function audienceFor(userId) {
+  if (!userId) return 'B2C'
+  const { rows } = await query(
+    `SELECT 1 FROM vendor_users vu JOIN vendors v ON v.id = vu.vendor_id
+      WHERE vu.user_id = $1 AND vu.is_active = TRUE AND vu.deleted_at IS NULL AND v.deleted_at IS NULL AND v.status IN ('VERIFIED','ACTIVE') LIMIT 1`, [userId])
+  return rows[0] ? 'B2B' : 'B2C'
+}
+
 export async function listPublic(userId, { tab = 'live', q = '', categoryId = null, page = 1, limit = 20 } = {}) {
   const where = []
   const params = []
   let order = 'a.ends_at ASC'
+  params.push(await audienceFor(userId)); where.push(`a.audience = $${params.length}`)
   if (tab === 'upcoming') { where.push(`a.status = 'SCHEDULED'`); order = 'a.starts_at ASC' }
   else if (tab === 'ended') {
     where.push(`a.status IN ('AWAITING_PAYMENT','SOLD','UNSOLD') AND a.ended_at > NOW() - INTERVAL '7 days'`)
@@ -139,6 +167,7 @@ export async function getPublic(userId, auctionId) {
   )
   const a = rows[0]
   if (!a || !PUBLIC_STATUSES.includes(a.status)) throw new AuctionError('NOT_FOUND', 'Auction not found', 404)
+  if (a.audience !== (await audienceFor(userId))) throw new AuctionError('NOT_FOUND', 'Auction not found', 404)
   const [item] = await hydrate([a], userId)
   if (a.status === 'CANCELLED' && !item.my.registered) throw new AuctionError('NOT_FOUND', 'Auction not found', 404)
   return item

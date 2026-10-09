@@ -35,7 +35,10 @@ export function resolveRule(rules, ctx) {
     const s = SCOPE_RANK[b.scope] - SCOPE_RANK[a.scope]
     if (s !== 0) return s
     // channel-specific beats ALL
-    return (b.channel === ctx.channel ? 1 : 0) - (a.channel === ctx.channel ? 1 : 0)
+    const c = (b.channel === ctx.channel ? 1 : 0) - (a.channel === ctx.channel ? 1 : 0)
+    if (c !== 0) return c
+    // a legacy fallback (the shop's old flat rate) never beats a real rule
+    return (a.fallback ? 1 : 0) - (b.fallback ? 1 : 0)
   })
   return candidates[0] || null
 }

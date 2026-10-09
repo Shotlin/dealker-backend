@@ -128,6 +128,9 @@ export function serializePublic(a, ctx = {}) {
     image_url: a.image_url,
     images: a.images || [],
     status: a.status,
+    audience: a.audience || 'B2C',
+    quantity: Number(a.quantity || 1),
+    unit_price: Number(a.quantity || 1) > 1 ? Math.round(((a.bid_count > 0 ? num(a.current_price) : num(a.start_price)) / Number(a.quantity)) * 100) / 100 : null,
     seller: { type: a.vendor_id ? 'VENDOR' : 'PLATFORM', name: a.seller_name || (a.vendor_id ? 'Verified seller' : 'Dealker Official') },
     start_price: num(a.start_price),
     current_price: a.bid_count > 0 ? num(a.current_price) : num(a.start_price),
@@ -172,6 +175,8 @@ export function serializePublic(a, ctx = {}) {
 export function serializeAdmin(a, { includePrivate = true } = {}) {
   const out = {
     ...a,
+    audience: a.audience || 'B2C',
+    quantity: Number(a.quantity || 1),
     start_price: num(a.start_price),
     current_price: num(a.current_price),
     reserve_price: num(a.reserve_price),

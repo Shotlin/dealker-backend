@@ -69,7 +69,7 @@ export async function reserveStock(client, a) {
   if (!a.shop_product_id) throw new AuctionError('PRODUCT_NOT_LISTED', 'This product has no stock listing to auction', 409)
   try {
     await stockRepo.applyStockChange(client, {
-      shopProductId: a.shop_product_id, delta: -1, type: 'ORDER_DEDUCTION', source: 'API',
+      shopProductId: a.shop_product_id, delta: -Number(a.quantity || 1), type: 'ORDER_DEDUCTION', source: 'API',
       reason: `Reserved for auction ${a.auction_number}`, metadata: { auction_id: a.id },
     })
   } catch (err) {
@@ -82,7 +82,7 @@ export async function reserveStock(client, a) {
 export async function releaseStock(client, a) {
   if (!a.stock_reserved) return
   await stockRepo.applyStockChange(client, {
-    shopProductId: a.shop_product_id, delta: 1, type: 'CANCELLATION_RESTORE', source: 'API',
+    shopProductId: a.shop_product_id, delta: Number(a.quantity || 1), type: 'CANCELLATION_RESTORE', source: 'API',
     reason: `Released from auction ${a.auction_number}`, metadata: { auction_id: a.id },
   })
   await client.query('UPDATE auctions SET stock_reserved = FALSE WHERE id = $1', [a.id])
