@@ -26,6 +26,7 @@ import adminAbandonedCartsRoutes from './abandoned-carts/abandoned-carts.routes.
 import { roleRoutes, teamRoutes } from './team/team.routes.js'
 import adminThemeRoutes from './themes/themes.routes.js'
 import adminThemeTabRoutes from './theme-tabs/theme-tabs.routes.js'
+import adminStorefrontStoreRoutes from './storefront-stores/storefront-stores.routes.js'
 import adminSectionRoutes from './sections/sections.routes.js'
 import adminReturnsRoutes from './returns/returns.routes.js'
 
@@ -87,6 +88,7 @@ export default async function adminRoutes(fastify) {
   fastify.register(teamRoutes, { prefix: '/team' })
   fastify.register(adminThemeRoutes, { prefix: '/themes' })
   fastify.register(adminThemeTabRoutes, { prefix: '/theme-tabs' })
+  fastify.register(adminStorefrontStoreRoutes, { prefix: '/storefront-stores' })
   fastify.register(adminSectionRoutes, { prefix: '/sections' })
   fastify.register(adminReturnsRoutes, { prefix: '/returns' })
 }

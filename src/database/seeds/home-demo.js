@@ -76,12 +76,22 @@ const themeData = (store) => ({
       containerColor: YELLOW_SOFT,
     },
     bannerAnimation: { lottieUrl: null, containerColor: YELLOW_SOFT, backgroundGradient: [YELLOW_SOFT, YELLOW] },
+    // Home look colours (all editable in the dashboard theme builder; these mirror the design).
+    homeLook: {
+      avatarColor: '#111111', storeTileColor: '#FFFFFF', storeTileActiveColor: '#FCE8B0', storeTileLabelColor: '#111111',
+      searchPillColor: '#FFFFFF', searchPillTextColor: '#111111', sellChipStartColor: '#FBE36B', sellChipEndColor: '#F6D23A', sellChipTextColor: '#111111',
+      heroFrameColor: '#000000', heroDotColor: '#FFFFFF', feeCardColor: '#FFFFFF', feeCardTextColor: '#111111', feeCardCheckColor: '#111111',
+    },
   },
 })
 
 const sectionRows = (store) => [
   ['promo_carousel', { banner_source: 'custom', images: HERO[store].map(url), height: 200 }],
-  ['fee_strip', { visible: true, image_url: null, pill_style: 'soft', accent_color: '#111111' }],
+  ['fee_strip', {
+    visible: true, image_url: null, pill_style: 'soft', accent_color: '#111111',
+    // Demo marketing copy copied from the design — NOT derived from fee_settings (handling/platform fees are ₹5 on the dev DB).
+    title: '₹0 FEES', lines: ['₹0 Handling Fee', '₹0 Delivery Fee*', '₹0 Rain & Surge Fee'], footnote: '*T&C Apply. Savings basis on item & location.',
+  }],
   ['seasonal_mosaic', {
     layout_variant: 'hero_plus_four', hero_ratio: '16:10', tile_radius: 16, container_color: YELLOW_SOFT,
     hero_tile: { title: 'DEAL ZONE', gradient: ['#FFA43A', '#F57C00'], badge_text: 'BUY 1\nGET 2', badge_gradient: ['#111111', '#111111'], image_url: url('deal-zone') },

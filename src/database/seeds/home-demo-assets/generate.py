@@ -35,17 +35,17 @@ for n, ch in {'store-mobile':'📱','store-mobile-part':'🔧','store-accessorie
     save_icon(n, ch)
 
 def hero(name, l1, l2, l3, pill, chips, ch, c1, c2):
-    W, H = 1280, 720
+    W, H = 1370, 600  # 870:382 design ratio of the home hero frame
     im = gradient(W, H, c1, c2)
     d = ImageDraw.Draw(im)
-    d.text((70, 90), l1, font=font(70), fill='white')
-    d.text((70, 170), l2, font=font(120), fill=(255, 214, 10))
-    d.text((70, 300), l3, font=font(100), fill='white')
-    d.rounded_rectangle((70, 450, 560, 540), 40, fill=(255, 214, 10))
-    d.text((105, 466), pill, font=font(54), fill=(20, 20, 60))
-    d.text((70, 590), chips, font=font(34), fill=(210, 210, 255))
-    e = emoji(ch, 520)
-    im.paste(e, (700, 90), e)
+    d.text((70, 40), l1, font=font(56), fill='white')
+    d.text((70, 100), l2, font=font(104), fill=(255, 214, 10))
+    d.text((70, 215), l3, font=font(84), fill='white')
+    d.rounded_rectangle((70, 338, 520, 416), 38, fill=(255, 214, 10))
+    d.text((100, 350), pill, font=font(46), fill=(20, 20, 60))
+    d.text((70, 480), chips, font=font(30), fill=(210, 210, 255))
+    e = emoji(ch, 440)
+    im.paste(e, (830, 80), e)
     im.save(os.path.join(HERE, name + '.png'))
 
 hero('banner-mobiles', 'LATEST', 'MOBILES', 'BEST PRICES', 'UP TO 70% OFF', 'Brand Warranty  |  Easy EMI  |  Fast Delivery', '📱', (30, 20, 110), (120, 40, 200))
