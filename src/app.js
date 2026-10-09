@@ -499,6 +499,12 @@ export const buildApp = async () => {
   await app.register(exchangeRequestsRoutes, { prefix: "/api/v1/exchange-requests" });
   await app.register(exchangeRequestManageRoutes, { prefix: "/api/v1/manage/exchange-requests" });
 
+  // Repairs — device repair management for B2C and B2B (see modules/repairs)
+  const { repairsCustomerRoutes, repairsManageRoutes, repairEvidenceFileRoutes } = await import("./modules/repairs/repairs.routes.js");
+  await app.register(repairsCustomerRoutes, { prefix: "/api/v1/repairs" });
+  await app.register(repairsManageRoutes, { prefix: "/api/v1/manage/repairs" });
+  await app.register(repairEvidenceFileRoutes, { prefix: "/api/v1/media" });
+
   // Sponsored ads — pay-per-click product promotion (shopper click billing + admin/vendor management)
   const { adsPublicRoutes, adsManageRoutes } = await import(
     "./modules/ads/ads.routes.js"

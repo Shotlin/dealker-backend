@@ -5,13 +5,14 @@
  */
 import { logger } from '../config/logger.js'
 import { purgeOrphanMedia } from '../modules/sell-requests/evidence.service.js'
+import { purgeOrphanRepairMedia } from '../modules/repairs/repairs.media.js'
 
 const EVERY_MS = 60 * 60 * 1000
 let handle = null
 
 async function run() {
   try {
-    const n = await purgeOrphanMedia()
+    const n = (await purgeOrphanMedia()) + (await purgeOrphanRepairMedia())
     if (n) logger.info({ action: 'evidence_cleanup', removed: n }, 'Removed abandoned evidence uploads')
   } catch (err) {
     logger.error({ err: err.message }, 'Evidence cleanup failed')
