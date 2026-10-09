@@ -160,6 +160,10 @@ export const buildApp = async () => {
     setHeaders: (res) => res.setHeader("Cross-Origin-Resource-Policy", "cross-origin"),
   });
   await app.register(import("./modules/uploads/local-uploads.routes.js"), { prefix: "/api/v1/uploads/local" });
+  // Private sell/exchange request evidence (photos + QC video): signed, expiring links only.
+  await app.register(async (i) => i.register((await import("./modules/sell-requests/sell-requests.routes.js")).sellEvidenceFileRoutes), {
+    prefix: "/api/v1/media",
+  });
   await app.register(async (i) => i.register((await import("./modules/listings/listings.routes.js")).adminListingRoutes), {
     prefix: "/api/v1/admin/listings",
   });

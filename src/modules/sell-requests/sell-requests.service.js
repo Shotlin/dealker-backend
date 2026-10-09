@@ -18,6 +18,8 @@
 import { getClient, query } from '../../config/database.js'
 import { notifySellEvent } from './sell-requests.notify.js'
 import { DEFAULT_RULES, ValidationError, isValidImei, parseQa, valuate, variantBase } from './valuation.js'
+import { claimMedia, listMedia } from './evidence.service.js'
+import { assertQcAllowsApproval, assertQcAllowsCompletion, ensureQc, getQc } from './request-qc.service.js'
 
 export class SellError extends Error {
   constructor(code, message, statusCode = 400, details = {}) {
@@ -52,7 +54,7 @@ const scopeKindOf = (actor) => {
 const PHONE_RE = /^\+?\d[\d ]{9,13}$/
 
 /** Run `fn(client)` inside a transaction. */
-async function tx(fn) {
+export async function tx(fn) {
   const client = await getClient()
   try {
     await client.query('BEGIN')
@@ -67,7 +69,7 @@ async function tx(fn) {
   }
 }
 
-async function addEvent(client, requestId, kind, label, actor, meta = {}) {
+export async function addEvent(client, requestId, kind, label, actor, meta = {}) {
   await client.query(
     `INSERT INTO sell_request_events (request_id, kind, label, actor_id, actor_role, meta) VALUES ($1,$2,$3,$4,$5,$6)`,
     [requestId, kind, label, actor?.userId || null, actor?.kind || null, meta]
@@ -92,6 +94,10 @@ export async function getSettingsForAdmin() {
     maxTotalDeductionPct: num(s.max_total_deduction_pct),
     variantStepPct: num(s.variant_step_pct),
     maxImages: s.max_images,
+    maxVideos: s.max_videos,
+    maxImageMb: s.max_image_mb,
+    maxVideoMb: s.max_video_mb,
+    qcRequiredForApproval: s.qc_required_for_approval,
   }
 }
 
@@ -111,16 +117,30 @@ export async function updateSettings(actor, input) {
     return n
   }
   const cur = await getSettings()
+  const int = (v, name, lo, hi, fallback) => {
+    if (v === undefined) return fallback
+    const n = Number(v)
+    if (!Number.isInteger(n) || n < lo || n > hi) throw new SellError('VALIDATION', `${name} must be a whole number from ${lo} to ${hi}`, 422)
+    return n
+  }
+  const maxImages = int(input.maxImages, 'maxImages', 0, 20, cur.max_images)
+  const maxVideos = int(input.maxVideos, 'maxVideos', 0, 5, cur.max_videos)
+  const maxImageMb = int(input.maxImageMb, 'maxImageMb', 1, 25, cur.max_image_mb)
+  const maxVideoMb = int(input.maxVideoMb, 'maxVideoMb', 5, 500, cur.max_video_mb)
+  if (input.qcRequiredForApproval !== undefined && typeof input.qcRequiredForApproval !== 'boolean') throw new SellError('VALIDATION', 'qcRequiredForApproval must be true or false', 422)
   await query(
     `UPDATE sell_settings SET enabled = $1, rules = $2, max_total_deduction_pct = $3, variant_step_pct = $4,
-            max_images = $5, updated_by = $6, updated_at = NOW() WHERE id = TRUE`,
+            max_images = $5, updated_by = $6, updated_at = NOW(),
+            max_videos = $7, max_image_mb = $8, max_video_mb = $9, qc_required_for_approval = $10 WHERE id = TRUE`,
     [
       input.enabled ?? cur.enabled,
       input.rules !== undefined ? patch : cur.rules,
       input.maxTotalDeductionPct !== undefined ? pct(input.maxTotalDeductionPct, 'maxTotalDeductionPct') : cur.max_total_deduction_pct,
       input.variantStepPct !== undefined ? pct(input.variantStepPct, 'variantStepPct') : cur.variant_step_pct,
-      input.maxImages ?? cur.max_images,
+      maxImages,
       actor.userId,
+      maxVideos, maxImageMb, maxVideoMb,
+      input.qcRequiredForApproval ?? cur.qc_required_for_approval,
     ]
   )
   return getSettingsForAdmin()
@@ -254,7 +274,8 @@ function serialize(r, { actor = { kind: 'ADMIN' }, offers = [], events = [], ass
     condition: r.condition,
     qa: r.qa,
     description: r.description,
-    imageCount: r.images.length,
+    imageCount: r.images.length + Number(r.media_images || 0),
+    videoCount: Number(r.media_videos || 0),
     images: r.images,
     expectedPrice: num(r.expected_price),
     quote: num(r.quote),
@@ -282,6 +303,8 @@ const serializeOffer = (o) => ({
 
 const SELECT_REQ = `
   SELECT r.*, (SELECT COUNT(*) FROM sell_requests x WHERE x.customer_phone = r.customer_phone) AS total_requests,
+         (SELECT COUNT(*) FROM sell_request_media m WHERE m.entity_id = r.id AND m.media_type = 'IMAGE') AS media_images,
+         (SELECT COUNT(*) FROM sell_request_media m WHERE m.entity_id = r.id AND m.media_type = 'VIDEO') AS media_videos,
          v.name AS assigned_vendor_name,
          o.order_number AS exchange_order_number, o.status::text AS exchange_order_status, o.total_payable AS exchange_order_total
     FROM sell_requests r LEFT JOIN vendors v ON v.id = r.assigned_vendor_id
@@ -307,7 +330,7 @@ async function loadEvents(requestId) {
 }
 
 /** Visibility predicate, appended to WHERE with `params` mutated for any new binds. */
-function scope(actor, params) {
+export function scope(actor, params) {
   params.push(scopeKindOf(actor))
   const sectionSql = `r.kind = $${params.length}`
   if (actor.kind !== 'VENDOR') return sectionSql
@@ -315,7 +338,7 @@ function scope(actor, params) {
   return `${sectionSql} AND (r.assigned_vendor_id = $${params.length} OR (r.assigned_vendor_id IS NULL AND r.status = ANY('{PENDING,IN_PROGRESS}')))`
 }
 
-async function fetchOne(actor, id) {
+export async function fetchOne(actor, id) {
   const params = [id]
   const sc = scope(actor, params)
   const { rows } = await query(`${SELECT_REQ} WHERE r.id = $1 AND ${sc}`, params)
@@ -325,8 +348,12 @@ async function fetchOne(actor, id) {
 
 export async function getManage(actor, id) {
   const r = await fetchOne(actor, id)
-  const [offers, events] = await Promise.all([loadOffers(id, actor), loadEvents(id)])
-  return serialize(r, { actor, offers, events, assignedVendorName: r.assigned_vendor_name })
+  const [offers, events, media, qc] = await Promise.all([loadOffers(id, actor), loadEvents(id), listMedia(id), getQc(id)])
+  const out = serialize(r, { actor, offers, events, assignedVendorName: r.assigned_vendor_name })
+  out.media = media
+  // Vendors see the evidence but not the platform's internal QC notes.
+  out.qc = actor.kind === 'VENDOR' ? { status: qc.status } : qc
+  return out
 }
 
 // ── Listing & stats ─────────────────────────────────────────────────────
@@ -491,6 +518,8 @@ export async function createRequest(actor, input) {
         await addEvent(client, rows[0].id, 'ORDER_LINKED', `Order ${o.order_number} linked`, actor, { orderId: o.id })
       }
       created = rows[0].id
+      await ensureQc(client, rows[0].id, actor)
+      if (Array.isArray(input.mediaIds) && input.mediaIds.length) await claimMedia(client, rows[0], actor, input.mediaIds, 'CUSTOMER_SUBMISSION')
       const full = { ...rows[0], total_requests: 1 }
       return full
     }).then(async (full) => getManage({ kind: 'ADMIN', scopeKind: full.kind }, full.id))
@@ -526,6 +555,8 @@ export async function getMine(userId, id, kind) {
     `SELECT MAX(amount) AS best FROM sell_request_offers WHERE request_id = $1 AND status IN ('OPEN','ACCEPTED')`, [id]
   )
   const out = serialize(rows[0], { events })
+  out.media = await listMedia(id)
+  out.qc = await getQc(id, { forCustomer: true })
   out.bestOffer = num(best[0].best)
   delete out.adminNote
   return out
@@ -533,7 +564,7 @@ export async function getMine(userId, id, kind) {
 
 // ── State transitions ───────────────────────────────────────────────────
 
-async function lock(client, id, actor) {
+export async function lock(client, id, actor) {
   const { rows } = await client.query('SELECT * FROM sell_requests WHERE id = $1 FOR UPDATE', [id])
   // A request from the other section is invisible here, exactly as if it did not exist.
   if (!rows[0] || rows[0].kind !== scopeKindOf(actor)) {
@@ -556,6 +587,7 @@ export const approve = (actor, id) => tx(async (client) => {
   const r = await lock(client, id, actor)
   need(r, OPEN, 'Only pending or in-progress requests can be approved')
   if (!r.assigned_vendor_id) throw new SellError('NO_VENDOR', 'Assign a vendor offer before approving', 409)
+  await assertQcAllowsApproval(client, id)
   await client.query(`UPDATE sell_requests SET status='APPROVED', decided_by=$2, decided_at=NOW(), updated_at=NOW() WHERE id=$1`, [id, actor.userId])
   await addEvent(client, id, 'APPROVED', 'Approved', actor)
 }).then(() => { notifySellEvent('APPROVED', id); return getManage(actor, id) })
@@ -585,6 +617,7 @@ export const complete = (actor, id) => tx(async (client) => {
   if (r.type === 'EXCHANGE' && !r.exchange_order_id) {
     throw new SellError('EXCHANGE_ORDER_REQUIRED', 'Link the order for the new product before completing an exchange', 409)
   }
+  await assertQcAllowsCompletion(client, id)
   await client.query(`UPDATE sell_requests SET status='COMPLETED', updated_at=NOW() WHERE id=$1`, [id])
   await addEvent(client, id, 'COMPLETED', 'Completed', actor)
 }).then(() => { notifySellEvent('COMPLETED', id); return getManage(actor, id) })

@@ -89,6 +89,8 @@ export async function startWorkerRuntime() {
   // Subscription sweeper — expires lapsed plans, warns before expiry.
   const { startSubscriptionSweeper } = await import('../workers/subscription.worker.js')
   startSubscriptionSweeper()
+  const { startEvidenceCleanup } = await import('../workers/evidence-cleanup.worker.js')
+  startEvidenceCleanup()
 
   // Promo campaigns — starts/ends scheduled discounts and sections on time.
   const { startPromoCampaignWorker } = await import('../workers/promo-campaign.worker.js')

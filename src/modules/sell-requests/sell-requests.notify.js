@@ -77,6 +77,9 @@ const COPY = {
     v: (r) => ({ to: 'OFFERED', title: 'Request closed', body: `${r.code} · ${r.model_name} was rejected.` }),
   },
   INFO_REQUESTED: { c: (r, x) => ({ title: 'More details needed', body: `${r.code}: ${x.message}` }) },
+  QC_PASSED: { c: (r, x) => ({ title: 'Your device passed inspection', body: `${r.code}: final value ${x.finalValuation != null ? rupees(x.finalValuation) : rupees(r.quote)}. Open the app to accept or decline.` }) },
+  QC_RECHECK: { c: (r, x) => ({ title: 'We need another look', body: `${r.code}: ${x.message || 'a recheck of your device is needed.'}` }) },
+  QC_FAILED: { c: (r, x) => ({ title: 'Inspection could not be passed', body: `${r.code}: ${x.message || 'the device did not meet requirements.'}` }) },
   ORDER_LINKED: { c: (r) => ({ title: 'Trade-in linked to your order', body: `Your ${r.model_name} trade-in ${r.code} is linked to your new order.` }) },
   COMPLETED: {
     c: (r) => ({ title: 'Request completed', body: `${r.code} for your ${r.model_name} is complete. Thank you!` }),

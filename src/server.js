@@ -10,6 +10,7 @@ import { startCampaignScheduler, stopCampaignScheduler } from './workers/campaig
 import { startPaymentExpiryWorker, stopPaymentExpiryWorker } from './workers/payment-expiry.worker.js'
 import { startAbandonedCartWorker, stopAbandonedCartWorker } from './workers/abandoned-cart.worker.js'
 import { startSubscriptionSweeper } from './workers/subscription.worker.js'
+import { startEvidenceCleanup } from './workers/evidence-cleanup.worker.js'
 import { startPromoCampaignWorker } from './workers/promo-campaign.worker.js'
 import { startAlertSweeper } from './workers/alert-sweep.worker.js'
 import {
@@ -75,6 +76,7 @@ const start = async () => {
     startPaymentExpiryWorker()
     // Idempotent clocks (atomic claims) — safe even if a separate worker process also runs them.
     startSubscriptionSweeper()
+    startEvidenceCleanup()
     startPromoCampaignWorker()
     startAlertSweeper()
 
