@@ -12,6 +12,7 @@
  * @module modules/repairs/repairs.service
  */
 import { getClient, query } from '../../config/database.js'
+import { logger } from '../../config/logger.js'
 import { advanceFor, canMove, computeQuote, GSTIN_RE, LINE_KINDS, money, settle, TABS, warrantyUntil } from './repairs.engine.js'
 import { claimRepairMedia, listRepairMedia } from './repairs.media.js'
 import { notifyRepair } from './repairs.notify.js'
@@ -285,14 +286,17 @@ function scope(actor, params) {
 }
 
 async function loadDetail(r, actor) {
-  const [items, quotes, payments, events, media] = await Promise.all([
+  const [items, quotes, payments, events, media, inv] = await Promise.all([
     query('SELECT * FROM repair_items WHERE request_id = $1 ORDER BY line_no', [r.id]),
     query('SELECT * FROM repair_quotes WHERE request_id = $1 ORDER BY version DESC', [r.id]),
     actor.kind === 'VENDOR' ? { rows: [] } : query('SELECT * FROM repair_payments WHERE request_id = $1 ORDER BY created_at, id', [r.id]),
     query('SELECT * FROM repair_events WHERE request_id = $1 ORDER BY id', [r.id]),
     listRepairMedia(r.id),
+    query(`SELECT id, doc_number, doc_type FROM sales_documents WHERE source_type = 'REPAIR' AND source_id = $1 AND doc_type IN ('TAX_INVOICE','BILL_OF_SUPPLY')`, [r.id]),
   ])
-  return serialize(r, { actor, items: items.rows, quotes: quotes.rows, payments: payments.rows, events: events.rows, media })
+  const out = serialize(r, { actor, items: items.rows, quotes: quotes.rows, payments: payments.rows, events: events.rows, media })
+  out.invoice = inv.rows[0] ? { id: inv.rows[0].id, number: inv.rows[0].doc_number, docType: inv.rows[0].doc_type } : null
+  return out
 }
 
 export async function getManage(actor, id) {
@@ -623,7 +627,20 @@ export const deliver = (actor, id, { itemIds } = {}) => tx(async (client) => {
   }
   await moveTo(client, r, 'COMPLETED', actor, 'Delivered — repair completed', cols, { devices: chosen.length })
   return { completed: true }
-}).then((o) => { if (o.completed) notifyRepair('COMPLETED', id); return getManage(actor, id) })
+}).then(async (o) => {
+  if (o.completed) {
+    notifyRepair('COMPLETED', id)
+    // Billing must never block a hand-over: if it fails the repair stays completed and the invoice can be issued
+    // again from the dashboard (issuing is idempotent per repair).
+    try {
+      const { issueForRepair } = await import('../sales-invoices/sales-invoices.service.js')
+      await issueForRepair(id, actor)
+    } catch (err) {
+      logger.warn({ err: err.message, code: err.code, repairId: id }, 'automatic repair invoice could not be issued')
+    }
+  }
+  return getManage(actor, id)
+})
 
 /** Warranty claim: bring a finished repair back for rework at no charge. */
 export const reopen = (actor, id, { reason, itemIds } = {}) => tx(async (client) => {

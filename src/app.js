@@ -505,6 +505,11 @@ export const buildApp = async () => {
   await app.register(repairsManageRoutes, { prefix: "/api/v1/manage/repairs" });
   await app.register(repairEvidenceFileRoutes, { prefix: "/api/v1/media" });
 
+  // Sales documents — GST tax invoices, bills of supply, credit/debit notes (B2C + B2B)
+  const { salesInvoicesCustomerRoutes, salesInvoicesManageRoutes } = await import("./modules/sales-invoices/sales-invoices.routes.js");
+  await app.register(salesInvoicesCustomerRoutes, { prefix: "/api/v1/sales-invoices" });
+  await app.register(salesInvoicesManageRoutes, { prefix: "/api/v1/manage/sales-invoices" });
+
   // Sponsored ads — pay-per-click product promotion (shopper click billing + admin/vendor management)
   const { adsPublicRoutes, adsManageRoutes } = await import(
     "./modules/ads/ads.routes.js"

@@ -211,6 +211,12 @@ const CANONICAL_PERMISSION_LIST = Object.freeze([
   'exchange_requests.view',
   'exchange_requests.manage',
   'exchange_requests.qc',
+  // ── Sales invoices ─────────────────────────────────────────────────────
+  'sales_invoices.view',
+  'sales_invoices.issue',
+  'sales_invoices.credit',
+  'sales_invoices.export',
+  'sales_invoices.settings',
   // ── Repairs (B2C + B2B) ────────────────────────────────────────────────
   'repairs.view',
   'repairs.manage',
