@@ -12,6 +12,11 @@ const SECTION_TYPES = [
   'custom_banner',
   'text_header',
   'spacer',
+  'live_auction',
+  'deal_of_day',
+  'mega_sale',
+  'exchange_sell',
+  'recent_recommended',
 ]
 
 const merchBindingSchema = {

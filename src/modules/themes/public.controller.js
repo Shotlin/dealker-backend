@@ -738,6 +738,10 @@ async function getImplicitSectionProducts(section, limit, allocatedShopIds, pric
         await getFeaturedProducts(sectionLimit, allocatedShopIds, priceMode),
         await getTrendingProducts(sectionLimit, allocatedShopIds, priceMode),
       ]).slice(0, sectionLimit)
+    case 'deal_of_day':
+      return getDealProducts(Math.min(sectionLimit, 5), allocatedShopIds, priceMode)
+    case 'recent_recommended':
+      return getTrendingProducts(sectionLimit, allocatedShopIds, priceMode)
     case 'category_product_grid':
     case 'product_carousel':
     case 'arched_product_showcase':
