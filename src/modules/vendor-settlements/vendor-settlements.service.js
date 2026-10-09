@@ -45,6 +45,8 @@ export class VendorSettlementsService {
         { type: 'SELLER_DISCOUNT', amount: -Number(so.seller_discount || 0), key: `st:${sellerOrderId}:SDISC` },
         { type: 'PLATFORM_DISCOUNT', amount: Number(so.platform_discount || 0), key: `st:${sellerOrderId}:PDISC` },
         { type: 'COMMISSION', amount: -Number(so.commission_amount || 0), key: `st:${sellerOrderId}:COMM` },
+        { type: 'PLATFORM_CHARGE', amount: -Number(so.platform_charge || 0), key: `st:${sellerOrderId}:PCHG` },
+        { type: 'TAX', amount: -Number(so.fee_tax_amount || 0), key: `st:${sellerOrderId}:FTAX` },
         { type: 'LOGISTICS', amount: -Number(so.shipping_charge || 0), key: `st:${sellerOrderId}:LOG` },
       ].filter((e) => e.amount !== 0)
 

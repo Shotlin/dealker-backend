@@ -90,7 +90,7 @@ export const orderOverview = {
         vendor: { id: so.vendor_id, name: so.vendor_name, legal_name: so.legal_name, gstin: so.gstin, phone: so.vendor_phone, email: so.vendor_email, rating: so.seller_rating != null ? Number(so.seller_rating) : null },
         pickup: { shop: so.shop_name, address: [so.shop_address, so.shop_city, so.shop_state, so.shop_pincode].filter(Boolean).join(', '), city: so.shop_city || so.vendor_city },
         items: items.filter((i) => i.seller_order_id === so.id).map((i) => ({ id: i.item_id, name: i.product_name, quantity: Number(i.quantity), unit_price: n(i.unit_price), subtotal: n(i.subtotal), image: i.thumbnail_url, condition: i.condition, brand: i.brand })),
-        money: { subtotal: n(so.item_subtotal), shipping: n(so.shipping_charge), commission_percent: n(so.commission_rate), commission: n(so.commission_amount), payable_to_vendor: n(so.payable_to_seller) },
+        money: { subtotal: n(so.item_subtotal), shipping: n(so.shipping_charge), commission_percent: n(so.commission_rate), commission: n(so.commission_amount), platform_charge: n(so.platform_charge), fee_tax: n(so.fee_tax_amount), channel: so.channel || 'B2C', payable_to_vendor: n(so.payable_to_seller) },
         payout: payouts[so.id],
         invoice: so.invoice_number ? { number: so.invoice_number, url: so.invoice_url } : null,
         media: media.filter((m) => m.seller_order_id === so.id).map((m) => ({ id: m.id, kind: m.kind, url: m.url, caption: m.caption, created_at: m.created_at })),
@@ -141,7 +141,9 @@ export const orderOverview = {
       customer: { id: o.customer_id, name: o.customer_name, phone: o.customer_phone, email: o.customer_email, since: o.customer_since, orders: cstats.orders, total_spent: n(cstats.spent),
         address: { name: addr.name, phone: addr.phone, line1: addr.line1 || addr.address_line1, city: addr.city, state: addr.state, pincode: addr.pincode } },
       payment: {
-        method: o.payment_method, status: o.payment_status, gateway: payment ? { id: payment.razorpay_payment_id, method: payment.method, status: payment.status, paid_at: payment.created_at, refund_amount: payment.refund_amount != null ? Number(payment.refund_amount) : null, refund_status: payment.refund_status } : null,
+        method: o.payment_method, status: o.payment_status,
+        plan: o.payment_plan || 'FULL_ONLINE', advance_amount: n(o.advance_amount), amount_paid: n(o.amount_paid), amount_due: n(o.amount_due),
+        gateway: payment ? { id: payment.razorpay_payment_id, method: payment.method, status: payment.status, paid_at: payment.created_at, refund_amount: payment.refund_amount != null ? Number(payment.refund_amount) : null, refund_status: payment.refund_status } : null,
         breakdown: { items: subtotal, delivery: n(o.delivery_fee) || n(o.shipping_charge), discount: n(o.discount_amount), tax_included: n(o.tax_amount), total: n(o.total_payable),
           points_used: Number(o.points_redeemed || 0), points_value: n(o.loyalty_redeemed_amount), wallet_used: n(o.wallet_amount) },
         coupon: o.coupon_code ? { code: o.coupon_code, saved: n(o.coupon_discount_amount) || n(o.discount_amount), details: coupon } : null,
@@ -196,7 +198,10 @@ async function rollUpParent(client, orderId, actorId) {
   await client.query(
     `UPDATE orders SET status = $2, updated_at = NOW(),
             delivered_at = CASE WHEN $2 = 'DELIVERED' THEN NOW() ELSE delivered_at END,
-            payment_status = CASE WHEN $2 = 'DELIVERED' AND payment_method = 'COD' THEN 'PAID' ELSE payment_status END WHERE id = $1`, [orderId, next])
+            payment_status = CASE WHEN $2 = 'DELIVERED' AND (payment_method = 'COD' OR payment_plan = 'PARTIAL') THEN 'PAID' ELSE payment_status END,
+            amount_paid = CASE WHEN $2 = 'DELIVERED' AND payment_status <> 'PAID' THEN amount_paid + amount_due ELSE amount_paid END,
+            amount_due = CASE WHEN $2 = 'DELIVERED' AND payment_status <> 'PAID' THEN 0 ELSE amount_due END
+      WHERE id = $1`, [orderId, next])
   await client.query(`INSERT INTO order_status_history (order_id, from_status, to_status, changed_by, note) VALUES ($1,$2,$3,$4,'Updated from shipment tracking')`, [orderId, o.status, next, actorId])
 }
 

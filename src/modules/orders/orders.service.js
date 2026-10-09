@@ -67,7 +67,12 @@ export class OrdersService {
    * previous handler only accepted a legacy checkout quote and therefore
    * rejected every real mobile order before any checkout logic ran.
    */
-  async placeOrder(customerId, payload) {
+  async placeOrder(customerId, rawPayload) {
+    // PARTIAL = advance paid online now + remainder collected as COD. It rides
+    // the ONLINE flow (Razorpay charges the advance only); the order keeps
+    // payment_plan = 'PARTIAL' so admin/delivery see Paid vs Remaining.
+    const isPartial = rawPayload.paymentMethod === 'PARTIAL'
+    const payload = isPartial ? { ...rawPayload, paymentMethod: 'ONLINE' } : rawPayload
     const priceMode = payload.priceMode === 'wholesale' ? 'wholesale' : 'retail'
 
     // Idempotency: a retried request for the same checkout attempt (a
@@ -99,6 +104,21 @@ export class OrdersService {
       throw err
     }
 
+    if (isPartial) {
+      const cfg = this.paymentSettingsService?.getConfig ? await this.paymentSettingsService.getConfig() : {}
+      if (cfg.codEnabled === false) {
+        const err = new Error('Partial payment needs COD for the remaining amount, and COD is disabled')
+        err.statusCode = 400
+        err.code = 'PARTIAL_UNAVAILABLE'
+        throw err
+      }
+      if (cfg.partialPaymentEnabled === false) {
+        const err = new Error('Partial payment is disabled')
+        err.statusCode = 400
+        err.code = 'PARTIAL_DISABLED'
+        throw err
+      }
+    }
     const methodCheck = await this._checkPaymentMethodAllowed(customerId, payload.addressId, payload.paymentMethod)
     if (methodCheck) {
       const err = new Error(methodCheck.message)
@@ -217,6 +237,25 @@ export class OrdersService {
       (payableAfterLoyalty - walletApplied).toFixed(2)
     )
 
+    // Partial payment: validate the advance against the final payable.
+    let paymentPlan = payload.paymentMethod === 'COD' ? 'COD' : 'FULL_ONLINE'
+    let advanceAmount = 0
+    if (isPartial) {
+      const cfg = this.paymentSettingsService?.getConfig ? await this.paymentSettingsService.getConfig() : {}
+      const minPct = Number(cfg.partialMinAdvancePercent ?? 10)
+      advanceAmount = Number(Number(rawPayload.advanceAmount || 0).toFixed(2))
+      const minAdvance = Number(((combinedPayable * minPct) / 100).toFixed(2))
+      if (!(advanceAmount > 0) || advanceAmount >= combinedPayable || advanceAmount < minAdvance) {
+        const err = new Error(
+          `Advance must be at least ${minPct}% (₹${minAdvance}) and less than the payable amount (₹${combinedPayable})`
+        )
+        err.statusCode = 400
+        err.code = 'PARTIAL_ADVANCE_INVALID'
+        throw err
+      }
+      paymentPlan = 'PARTIAL'
+    }
+
     const client = await getClient()
     const created = []
     const sellerOrders = []
@@ -255,6 +294,11 @@ export class OrdersService {
         walletAmount: walletApplied,
         walletDebited: debitNow,
         clientOrderRef: payload.clientOrderRef || null,
+        paymentPlan,
+        advanceAmount,
+        // COD / partial: the wallet slice is the only thing paid so far.
+        amountPaid: walletApplied,
+        amountDue: combinedPayable,
       })
 
       // ── 2. Loyalty redemption ledger (idempotent per parent order) ────
@@ -290,10 +334,17 @@ export class OrdersService {
         )
         const shop = shopRows[0] || {}
         const suffix = await this.repository.nextSellerOrderSuffix(client, parentRow.id)
-        const commissionRate = Number(shop.commission_rate || 0)
-        const commissionBase = Number((group.subtotal - group.discount).toFixed(2))
-        const commissionAmount = Number(((commissionBase * commissionRate) / 100).toFixed(2))
-        const payableToSeller = Number((commissionBase - commissionAmount).toFixed(2))
+        const { CommissionService } = await import('../commission/commission.service.js')
+        const fees = await (this.commissionService || new CommissionService()).forCheckoutGroup(client, {
+          vendorId: shop.vendor_id || null,
+          shopCommissionRate: shop.commission_rate,
+          items: group.items,
+          discount: group.discount,
+          shippingCharge: group.deliveryFee,
+        })
+        const commissionRate = fees.effectiveRate
+        const commissionAmount = fees.commission
+        const payableToSeller = Math.max(0, Number((fees.sellingPrice - fees.commission - fees.platformCharge - fees.tax).toFixed(2)))
 
         const sellerOrder = await this.repository.createSellerOrder(client, {
           orderId: parentRow.id,
@@ -306,6 +357,10 @@ export class OrdersService {
           platformDiscount: 0,
           commissionRate,
           commissionAmount,
+          platformCharge: fees.platformCharge,
+          feeTaxAmount: fees.tax,
+          feeBreakdown: { sellingPrice: fees.sellingPrice, lines: fees.lines },
+          channel: 'B2C',
           shippingCharge: group.deliveryFee,
           payableToSeller,
           estimatedDelivery: payload.deliveryMode === 'SCHEDULED'
@@ -765,6 +820,14 @@ export class OrdersService {
 
     try {
       if (delivered) {
+        // COD / partial: the remainder is collected at the door.
+        const { query: q } = await import('../../config/database.js')
+        await q(
+          `UPDATE orders
+              SET amount_paid = amount_paid + amount_due, amount_due = 0, payment_status = 'PAID'
+            WHERE id = $1 AND amount_due > 0 AND (payment_method = 'COD' OR payment_plan = 'PARTIAL')`,
+          [orderId]
+        )
         await loyalty.earnPendingForOrder(orderId, customerId, eligibleSubtotal)
         await referrals.checkQualification(orderId, customerId, 'ORDER_DELIVERED', Number(order.total_payable || order.totalAmount || 0))
         // Post settlement ledger entries for each seller order of the parent.

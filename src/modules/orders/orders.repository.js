@@ -150,9 +150,10 @@ export class OrdersRepository {
         loyalty_redeemed_amount, points_redeemed,
         delivery_fee, platform_fee, tax_amount, shipping_charge, total_payable,
         payment_method, payment_status, coupon_code, delivery_address,
-        delivery_notes, estimated_delivery, wallet_amount, wallet_debited, client_order_ref
+        delivery_notes, estimated_delivery, wallet_amount, wallet_debited, client_order_ref,
+        payment_plan, advance_amount, amount_paid, amount_due
       ) VALUES (
-        $1,$2,NULL,TRUE,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
+        $1,$2,NULL,TRUE,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28
       )
       RETURNING *`,
       [
@@ -166,6 +167,8 @@ export class OrdersRepository {
         data.couponCode || null, JSON.stringify(data.deliveryAddress),
         data.deliveryNotes || null, data.estimatedDelivery || null,
         data.walletAmount || 0, !!data.walletDebited, data.clientOrderRef || null,
+        data.paymentPlan || 'FULL_ONLINE', data.advanceAmount || 0,
+        data.amountPaid || 0, data.amountDue || 0,
       ]
     )
     await client.query(
@@ -183,8 +186,9 @@ export class OrdersRepository {
         order_id, seller_order_number, vendor_id, shop_id, status,
         item_subtotal, seller_discount, platform_discount,
         commission_rate, commission_amount, tax_amount, shipping_charge,
-        payable_to_seller, estimated_delivery
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        payable_to_seller, estimated_delivery,
+        platform_charge, fee_tax_amount, fee_breakdown, channel
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
       RETURNING *`,
       [
         data.orderId, data.sellerOrderNumber, data.vendorId, data.shopId,
@@ -193,6 +197,9 @@ export class OrdersRepository {
         data.commissionRate || 0, data.commissionAmount || 0,
         data.taxAmount || 0, data.shippingCharge || 0,
         data.payableToSeller || 0, data.estimatedDelivery || null,
+        data.platformCharge || 0, data.feeTaxAmount || 0,
+        data.feeBreakdown ? JSON.stringify(data.feeBreakdown) : null,
+        data.channel || 'B2C',
       ]
     )
     return rows[0]
@@ -300,6 +307,10 @@ export class OrdersRepository {
       walletDebited: !!row.wallet_debited,
       paymentMethod: row.payment_method,
       paymentStatus: row.payment_status,
+      paymentPlan: row.payment_plan || 'FULL_ONLINE',
+      advanceAmount: Number(row.advance_amount || 0),
+      amountPaid: Number(row.amount_paid || 0),
+      amountDue: Number(row.amount_due || 0),
       couponCode: row.coupon_code || null,
       clientOrderRef: row.client_order_ref || null,
       deliveryAddress: typeof row.delivery_address === 'string'
@@ -430,6 +441,14 @@ export class OrdersRepository {
     if (options.paymentStatus !== undefined) {
       setClauses.push(`payment_status = $${params.length + 1}`)
       params.push(options.paymentStatus)
+    }
+
+    if (options.onlinePaid !== undefined) {
+      // Money just captured online (full bill or the partial-payment advance).
+      // total_payable is already net of the wallet slice.
+      setClauses.push(`amount_paid = COALESCE(wallet_amount, 0) + $${params.length + 1}`)
+      setClauses.push(`amount_due = GREATEST(0, total_payable - $${params.length + 1})`)
+      params.push(options.onlinePaid)
     }
 
     if (options.paymentExpiresAt !== undefined) {

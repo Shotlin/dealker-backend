@@ -531,6 +531,12 @@ export const buildApp = async () => {
     prefix: "/api/v1/settlements",
   });
 
+  // Commission rules + vendor wallet (reason-coded ledger view)
+  const { adminCommissionRoutes } = await import("./modules/commission/commission.routes.js");
+  await app.register(adminCommissionRoutes, { prefix: "/api/v1/admin/commission" });
+  const { adminVendorWalletRoutes } = await import("./modules/vendor-wallet/vendor-wallet.routes.js");
+  await app.register(adminVendorWalletRoutes, { prefix: "/api/v1/admin/vendor-wallet" });
+
   // Marketplace Catalog — location-first discovery/ranking + seller-listing moderation
   const { publicDiscoveryRoutes, adminSellerListingsRoutes } = await import(
     "./modules/marketplace-catalog/marketplace-catalog.routes.js"

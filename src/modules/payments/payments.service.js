@@ -102,6 +102,11 @@ export class PaymentsService {
       return { success: false, message: 'Payment already completed' }
     }
 
+    // Partial payment charges the advance only; the rest is collected on delivery.
+    const chargeAmount = order.paymentPlan === 'PARTIAL' && order.advanceAmount > 0
+      ? order.advanceAmount
+      : order.totalAmount
+
     // Create Razorpay order. The razorpay SDK throws errors carrying a
     // `statusCode` mirrored from Razorpay's own API response (e.g. 401
     // when our API credentials are rejected) — left uncaught, that
@@ -115,7 +120,7 @@ export class PaymentsService {
     let rzpOrder
     try {
       rzpOrder = await razorpay.orders.create({
-        amount: Math.round(order.totalAmount * 100), // paise
+        amount: Math.round(chargeAmount * 100), // paise
         currency: 'INR',
         receipt: order.orderNumber,
         notes: {
@@ -140,7 +145,7 @@ export class PaymentsService {
       orderId: order.id,
       userId,
       razorpayOrderId: rzpOrder.id,
-      amount: order.totalAmount,
+      amount: chargeAmount,
       currency: 'INR',
       status: 'PENDING',
       expiresAt,
@@ -162,7 +167,9 @@ export class PaymentsService {
       data: {
         paymentId: payment.id,
         razorpayOrderId: rzpOrder.id,
-        amount: order.totalAmount,
+        amount: chargeAmount,
+        totalAmount: order.totalAmount,
+        paymentPlan: order.paymentPlan,
         currency: 'INR',
         keyId: getRazorpayKeyId(),
       },
@@ -360,7 +367,11 @@ export class PaymentsService {
         status: 'PAID',
         recoveredFromFailed: wasRecoveredFromFailed,
       }, client)
-      await this.ordersRepo.updateStatus(order.id, 'CONFIRMED', { paymentStatus: 'PAID' }, client)
+      const isPartialPlan = order.payment_plan === 'PARTIAL'
+      await this.ordersRepo.updateStatus(order.id, 'CONFIRMED', {
+        paymentStatus: isPartialPlan ? 'PARTIALLY_PAID' : 'PAID',
+        onlinePaid: Number(updated.amount),
+      }, client)
 
       await client.query('COMMIT')
       outcome = { success: true, payment: updated, order, userId: payment.userId, wasRecoveredFromFailed }

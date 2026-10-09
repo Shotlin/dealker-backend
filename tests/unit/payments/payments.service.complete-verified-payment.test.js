@@ -109,7 +109,7 @@ describe('PaymentsService.completeVerifiedPayment', () => {
       expect.objectContaining({ status: 'PAID', razorpayPaymentId: 'rzp_pay_1' }),
       mockClient
     )
-    expect(ordersRepo.updateStatus).toHaveBeenCalledWith('order-1', 'CONFIRMED', { paymentStatus: 'PAID' }, mockClient)
+    expect(ordersRepo.updateStatus).toHaveBeenCalledWith('order-1', 'CONFIRMED', { paymentStatus: 'PAID', onlinePaid: 210 }, mockClient)
     expect(mockClient.query).toHaveBeenCalledWith('COMMIT')
     expect(clearCartMock).toHaveBeenCalledWith('user-1')
     expect(recordUsageForOrderMock).toHaveBeenCalledWith('order-1')
@@ -179,7 +179,18 @@ describe('PaymentsService.completeVerifiedPayment', () => {
       expect.objectContaining({ status: 'PAID', recoveredFromFailed: true }),
       mockClient
     )
-    expect(ordersRepo.updateStatus).toHaveBeenCalledWith('order-5', 'CONFIRMED', { paymentStatus: 'PAID' }, mockClient)
+    expect(ordersRepo.updateStatus).toHaveBeenCalledWith('order-5', 'CONFIRMED', { paymentStatus: 'PAID', onlinePaid: 150 }, mockClient)
+  })
+
+  it('partial-payment plan: the captured advance marks the order PARTIALLY_PAID, not PAID', async () => {
+    const payment = { id: 'pay-p', orderId: 'order-p', userId: 'user-p', status: 'PENDING', amount: 5000 }
+    const order = { id: 'order-p', status: 'ORDER_PLACED', order_number: 'MK-1', total_payable: 50000, payment_plan: 'PARTIAL', delivery_mode: 'ASAP', created_at: new Date() }
+    const { service, ordersRepo } = makeService({ payment, order })
+
+    const result = await service.completeVerifiedPayment('rzp_order_p', { razorpayPaymentId: 'rzp_pay_p', source: 'PAYMENT_VERIFY' })
+
+    expect(result.success).toBe(true)
+    expect(ordersRepo.updateStatus).toHaveBeenCalledWith('order-p', 'CONFIRMED', { paymentStatus: 'PARTIALLY_PAID', onlinePaid: 5000 }, mockClient)
   })
 
   it('rolls back and reports failure if the DB transaction itself throws', async () => {

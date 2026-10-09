@@ -20,7 +20,9 @@ export const PlaceMobileOrderSchema = {
   required: ['addressId', 'paymentMethod'],
   properties: {
     addressId: { type: 'string', format: 'uuid' },
-    paymentMethod: { type: 'string', enum: ['COD', 'ONLINE', 'WALLET'] },
+    paymentMethod: { type: 'string', enum: ['COD', 'ONLINE', 'WALLET', 'PARTIAL'] },
+    // PARTIAL: pay `advanceAmount` online now, the rest on delivery (COD).
+    advanceAmount: { type: 'number', minimum: 1 },
     priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
     couponCode: { type: 'string', maxLength: 50 },
     deliveryNotes: { type: 'string', maxLength: 500 },
