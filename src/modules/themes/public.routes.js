@@ -46,6 +46,13 @@ export default async function publicThemeRoutes(fastify) {
     preHandler: [tryAttachUser],
   }, ctrl.getActiveTheme.bind(ctrl))
 
+  fastify.get('/stores', {
+    schema: {
+      tags: ['Theme'],
+      summary: 'List the top-of-home store tiles (public, no auth)',
+    },
+  }, ctrl.getStores.bind(ctrl))
+
   fastify.get('/tabs', {
     schema: {
       tags: ['Theme'],
@@ -55,7 +62,7 @@ export default async function publicThemeRoutes(fastify) {
         properties: {
           store_key: {
             type: 'string',
-            enum: ['marketplace', 'deals', 'brand_store', 'new_arrivals'],
+            enum: ['mobile', 'mobile_part', 'accessories', 'electronics', 'repellents', 'marketplace', 'deals', 'brand_store', 'new_arrivals'],
           },
           priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
         },
@@ -90,7 +97,7 @@ export default async function publicThemeRoutes(fastify) {
         properties: {
           store_key: {
             type: 'string',
-            enum: ['marketplace', 'deals', 'brand_store', 'new_arrivals'],
+            enum: ['mobile', 'mobile_part', 'accessories', 'electronics', 'repellents', 'marketplace', 'deals', 'brand_store', 'new_arrivals'],
           },
           priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
         },
@@ -125,7 +132,7 @@ export default async function publicThemeRoutes(fastify) {
         properties: {
           store_key: {
             type: 'string',
-            enum: ['marketplace', 'deals', 'brand_store', 'new_arrivals'],
+            enum: ['mobile', 'mobile_part', 'accessories', 'electronics', 'repellents', 'marketplace', 'deals', 'brand_store', 'new_arrivals'],
           },
           priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
         },

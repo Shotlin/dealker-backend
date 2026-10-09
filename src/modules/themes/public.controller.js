@@ -130,6 +130,16 @@ export class PublicThemeController {
     return success(themeData, 'Active theme')
   }
 
+  async getStores() {
+    const { rows } = await query(
+      `SELECT store_key, label, icon_url, sort_order
+         FROM storefront_stores
+        WHERE is_active = TRUE
+        ORDER BY sort_order ASC, label ASC`
+    )
+    return success({ stores: rows }, 'Storefront stores')
+  }
+
   async getTabThemes(request, reply) {
     const storeKey = normalizeStoreKey(request.query?.store_key)
     const shopId = await this._resolveThemeShopId(request)

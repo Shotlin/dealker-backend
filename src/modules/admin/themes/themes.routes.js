@@ -27,7 +27,7 @@ export default async function adminThemeRoutes(fastify) {
       querystring: {
         type: 'object',
         properties: {
-          store_key: { type: 'string', enum: ['marketplace', 'deals', 'brand_store', 'new_arrivals'] },
+          store_key: { type: 'string', enum: ['mobile', 'mobile_part', 'accessories', 'electronics', 'repellents', 'marketplace', 'deals', 'brand_store', 'new_arrivals'] },
         },
       },
     },

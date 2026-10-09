@@ -1,4 +1,4 @@
-export const STORE_KEYS = ['marketplace', 'deals', 'brand_store', 'new_arrivals']
+export const STORE_KEYS = ['mobile', 'mobile_part', 'accessories', 'electronics', 'repellents', 'marketplace', 'deals', 'brand_store', 'new_arrivals']
 export const TAB_STATUSES = ['active', 'archived']
 
 export function getDefaultMerchConfig() {
