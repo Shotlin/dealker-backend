@@ -98,3 +98,64 @@ export const getMyReviewsSchema = {
     },
   },
 }
+
+export const getVendorReviewsSchema = {
+  tags: ['Reviews'],
+  summary: 'Get published reviews for a seller',
+  params: {
+    type: 'object',
+    required: ['vendorId'],
+    properties: { vendorId: { type: 'string', format: 'uuid' } },
+  },
+  querystring: {
+    type: 'object',
+    properties: {
+      page: { type: 'number', default: 1 },
+      limit: { type: 'number', default: 10 },
+    },
+  },
+}
+
+export const getVendorOrderReviewsSchema = {
+  tags: ['Reviews'],
+  summary: "Get the current user's seller reviews for one order",
+  params: {
+    type: 'object',
+    required: ['orderId'],
+    properties: { orderId: { type: 'string', format: 'uuid' } },
+  },
+}
+
+export const createVendorReviewSchema = {
+  tags: ['Reviews'],
+  summary: 'Review a seller after receiving an order from them',
+  body: {
+    type: 'object',
+    required: ['vendorId', 'orderId', 'rating'],
+    properties: {
+      vendorId: { type: 'string', format: 'uuid' },
+      orderId: { type: 'string', format: 'uuid' },
+      rating: { type: 'integer', minimum: 1, maximum: 5 },
+      comment: { type: 'string', maxLength: 1000 },
+    },
+  },
+}
+
+export const reportReviewSchema = {
+  tags: ['Reviews'],
+  summary: 'Report a published review',
+  params: {
+    type: 'object',
+    required: ['kind', 'id'],
+    properties: {
+      kind: { type: 'string', enum: ['product', 'vendor', 'PRODUCT', 'VENDOR'] },
+      id: { type: 'string', format: 'uuid' },
+    },
+  },
+  body: {
+    type: 'object',
+    required: ['reason'],
+    properties: { reason: { type: 'string', minLength: 3, maxLength: 500 } },
+  },
+}
+

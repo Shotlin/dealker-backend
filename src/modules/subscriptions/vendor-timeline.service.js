@@ -46,7 +46,7 @@ export async function vendorTimeline(vendorId) {
     query(`SELECT COUNT(*)::int AS cnt, COALESCE(-SUM(amount), 0) AS amount, MIN(created_at) AS first_at FROM settlement_ledger WHERE vendor_id = $1 AND entry_type = 'REFUND'`, [vendorId]),
     query(
       `SELECT COUNT(*)::int AS cnt, COALESCE(ROUND(AVG(r.rating)::numeric, 2), 0) AS avg, MIN(r.created_at) AS first_at
-         FROM reviews r JOIN products p ON p.id = r.product_id WHERE p.owner_vendor_id = $1`, [vendorId]),
+         FROM reviews r JOIN products p ON p.id = r.product_id WHERE p.owner_vendor_id = $1 AND r.status = 'PUBLISHED'`, [vendorId]),
     query(
       `SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE status = 'SOLD')::int AS sold,
               COUNT(*) FILTER (WHERE status = 'LIVE')::int AS live, MIN(created_at) AS first_at

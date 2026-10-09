@@ -70,7 +70,7 @@ export class AdminRepository {
               COALESCE(AVG(r.rating), 0) as avg_rating
        FROM products p
        LEFT JOIN order_items oi ON oi.product_id = p.id
-       LEFT JOIN reviews r ON r.product_id = p.id
+       LEFT JOIN reviews r ON r.product_id = p.id AND r.status = 'PUBLISHED'
        WHERE p.is_available = true
        GROUP BY p.id
        ORDER BY p.total_sold DESC

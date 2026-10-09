@@ -95,4 +95,48 @@ export class ReviewsController {
     const reviews = await this.service.getUserReviews(request.user.id, { page, limit })
     return reply.code(200).send(success(reviews, 'Your reviews fetched successfully'))
   }
+
+  /**
+   * GET /vendors/:vendorId — Published reviews for a seller
+   */
+  async getVendorReviews(request, reply) {
+    const { vendorId } = request.params
+    const { page = 1, limit = 10 } = request.query
+    const reviews = await this.service.getVendorReviews(vendorId, { page, limit })
+    return reply.code(200).send(success(reviews, 'Seller reviews fetched successfully'))
+  }
+
+  /**
+   * GET /vendors/order/:orderId — Current user's seller reviews for one order
+   */
+  async getVendorReviewsByOrder(request, reply) {
+    const reviews = await this.service.getVendorReviewsByOrder(request.user.id, request.params.orderId)
+    return reply.code(200).send(success(reviews, 'Order seller reviews fetched successfully'))
+  }
+
+  /**
+   * POST /vendors — Review a seller after receiving an order from them
+   */
+  async createVendorReview(request, reply) {
+    try {
+      const { vendorId, orderId, rating, comment } = request.body
+      const review = await this.service.createVendorReview(request.user.id, { vendorId, orderId, rating, comment })
+      return reply.code(201).send(success(review, 'Seller review submitted'))
+    } catch (err) {
+      return reply.code(err.statusCode || 500).send(error(err.message || 'Unable to create seller review'))
+    }
+  }
+
+  /**
+   * POST /report/:kind/:id — Report a published review for moderation
+   */
+  async reportReview(request, reply) {
+    try {
+      const { kind, id } = request.params
+      const result = await this.service.reportReview(request.user.id, kind.toUpperCase(), id, request.body?.reason)
+      return reply.code(200).send(success(result, 'Thanks — our team will take a look'))
+    } catch (err) {
+      return reply.code(err.statusCode || 500).send(error(err.message || 'Unable to report review'))
+    }
+  }
 }

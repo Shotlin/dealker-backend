@@ -9,6 +9,10 @@ import {
   updateReviewSchema,
   deleteReviewSchema,
   getMyReviewsSchema,
+  getVendorReviewsSchema,
+  getVendorOrderReviewsSchema,
+  createVendorReviewSchema,
+  reportReviewSchema,
 } from './reviews.schema.js'
 
 /**
@@ -60,4 +64,25 @@ export default async function reviewsRoutes(fastify) {
     schema: getMyReviewsSchema,
     preHandler: [fastify.authenticate],
   }, controller.getMyReviews.bind(controller))
+
+  // ── seller reviews ──
+  fastify.get('/vendors/order/:orderId', {
+    schema: getVendorOrderReviewsSchema,
+    preHandler: [fastify.authenticate],
+  }, controller.getVendorReviewsByOrder.bind(controller))
+
+  fastify.get('/vendors/:vendorId', {
+    schema: getVendorReviewsSchema,
+  }, controller.getVendorReviews.bind(controller))
+
+  fastify.post('/vendors', {
+    schema: createVendorReviewSchema,
+    preHandler: [fastify.authenticate],
+  }, controller.createVendorReview.bind(controller))
+
+  // POST /report/:kind/:id — flag a published review for the moderation team
+  fastify.post('/report/:kind/:id', {
+    schema: reportReviewSchema,
+    preHandler: [fastify.authenticate],
+  }, controller.reportReview.bind(controller))
 }

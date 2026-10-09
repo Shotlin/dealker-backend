@@ -576,6 +576,10 @@ export const buildApp = async () => {
   const { adminAbandonedB2bRoutes } = await import("./modules/abandoned-b2b/abandoned-b2b.routes.js");
   await app.register(adminAbandonedB2bRoutes, { prefix: "/api/v1/admin/abandoned-b2b" });
 
+  // Review moderation (product + vendor reviews)
+  const { adminReviewsRoutes } = await import("./modules/reviews/review-moderation.routes.js");
+  await app.register(adminReviewsRoutes, { prefix: "/api/v1/admin/reviews" });
+
   // Marketplace Catalog — location-first discovery/ranking + seller-listing moderation
   const { publicDiscoveryRoutes, adminSellerListingsRoutes } = await import(
     "./modules/marketplace-catalog/marketplace-catalog.routes.js"

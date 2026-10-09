@@ -1,4 +1,5 @@
 import { query } from '../../config/database.js'
+import { recomputeRating } from './review-moderation.service.js'
 
 /**
  * Reviews repository — database access for reviews
@@ -6,18 +7,18 @@ import { query } from '../../config/database.js'
 export class ReviewsRepository {
   async getProductReviews(productId, { offset, limit }) {
     const [countResult, result, avgResult] = await Promise.all([
-      query('SELECT COUNT(*) FROM reviews WHERE product_id = $1', [productId]),
+      query(`SELECT COUNT(*) FROM reviews WHERE product_id = $1 AND status = 'PUBLISHED'`, [productId]),
       query(
-        `SELECT r.id, r.rating, r.comment, r.created_at,
+        `SELECT r.id, r.rating, r.comment, r.created_at, r.admin_reply, r.replied_at,
                 u.name as user_name
          FROM reviews r
          JOIN users u ON r.user_id = u.id
-         WHERE r.product_id = $1
+         WHERE r.product_id = $1 AND r.status = 'PUBLISHED'
          ORDER BY r.created_at DESC
          LIMIT $2 OFFSET $3`,
         [productId, limit, offset]
       ),
-      query('SELECT AVG(rating) as avg_rating FROM reviews WHERE product_id = $1', [productId]),
+      query(`SELECT AVG(rating) as avg_rating FROM reviews WHERE product_id = $1 AND status = 'PUBLISHED'`, [productId]),
     ])
 
     const total = parseInt(countResult.rows[0].count)
@@ -94,7 +95,8 @@ export class ReviewsRepository {
   // review opportunity, hence scoping strictly by order_id here.
   async getReviewsByOrder(userId, orderId) {
     const { rows } = await query(
-      'SELECT product_id, rating, comment FROM reviews WHERE user_id = $1 AND order_id = $2',
+      `SELECT product_id, rating, comment, status, admin_reply FROM reviews
+        WHERE user_id = $1 AND order_id = $2 AND status <> 'REMOVED'`,
       [userId, orderId]
     )
     return rows
@@ -108,28 +110,40 @@ export class ReviewsRepository {
     return rows[0]
   }
 
-  async createReview(userId, { productId, orderId, rating, comment }) {
+  // Reviews go through moderation unless the admin switched auto-publish on.
+  async getAutoPublish() {
+    const { rows } = await query('SELECT auto_publish FROM review_settings WHERE id = 1')
+    return rows[0]?.auto_publish === true
+  }
+
+  async createReview(userId, { productId, orderId, rating, comment, status = 'SUBMITTED' }) {
     const { rows } = await query(
-      `INSERT INTO reviews (user_id, product_id, order_id, rating, comment)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, product_id, order_id, rating, comment, created_at`,
-      [userId, productId, orderId, rating, comment || null]
+      `INSERT INTO reviews (user_id, product_id, order_id, rating, comment, status)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, product_id, order_id, rating, comment, status, created_at`,
+      [userId, productId, orderId, rating, comment || null, status]
     )
     return rows[0]
   }
 
   async getReviewById(reviewId) {
     const { rows } = await query(
-      'SELECT id, user_id, product_id, rating, comment FROM reviews WHERE id = $1',
+      'SELECT id, user_id, product_id, rating, comment, status FROM reviews WHERE id = $1',
       [reviewId]
     )
     return rows[0]
   }
 
-  async updateReview(reviewId, { rating, comment }) {
+  async updateReview(reviewId, { rating, comment, status }) {
     const updates = []
     const params = []
     let idx = 1
+
+    if (status !== undefined) {
+      updates.push(`status = $${idx}`)
+      params.push(status)
+      idx++
+    }
 
     if (rating !== undefined) {
       updates.push(`rating = $${idx}`)
@@ -147,7 +161,7 @@ export class ReviewsRepository {
     const { rows } = await query(
       `UPDATE reviews SET ${updates.join(', ')}, updated_at = NOW()
        WHERE id = $${idx}
-       RETURNING id, product_id, rating, comment, updated_at`,
+       RETURNING id, product_id, rating, comment, status, updated_at`,
       params
     )
     return rows[0]
@@ -157,7 +171,7 @@ export class ReviewsRepository {
     await query('DELETE FROM reviews WHERE id = $1', [reviewId])
   }
 
-  // products.avg_rating/rating_count are denormalized for fast listing/detail
+  // products.avg_rating/rating_avg/rating_count are denormalized for fast listing/detail
   // reads — every customer-facing product query reads these stored columns
   // directly rather than joining reviews live. Previously nothing ever wrote
   // to them after the initial (always-zero) row insert, so a product's
@@ -165,27 +179,22 @@ export class ReviewsRepository {
   // this after any review create/update/delete so the stored columns stay
   // in sync with the real reviews table.
   async recomputeProductRating(productId) {
-    await query(
-      `UPDATE products
-          SET avg_rating = COALESCE(
-                (SELECT ROUND(AVG(rating)::numeric, 1) FROM reviews WHERE product_id = $1),
-                0
-              ),
-              rating_count = (SELECT COUNT(*) FROM reviews WHERE product_id = $1)
-        WHERE id = $1`,
-      [productId]
-    )
+    await recomputeRating('PRODUCT', productId)
+  }
+
+  async recomputeVendorRating(vendorId) {
+    await recomputeRating('VENDOR', vendorId)
   }
 
   async getUserReviews(userId, { offset, limit }) {
     const [countResult, result] = await Promise.all([
-      query('SELECT COUNT(*) FROM reviews WHERE user_id = $1', [userId]),
+      query(`SELECT COUNT(*) FROM reviews WHERE user_id = $1 AND status <> 'REMOVED'`, [userId]),
       query(
-        `SELECT r.id, r.rating, r.comment, r.created_at,
+        `SELECT r.id, r.rating, r.comment, r.created_at, r.status, r.admin_reply,
                 p.name as product_name, p.images as product_images
          FROM reviews r
          JOIN products p ON r.product_id = p.id
-         WHERE r.user_id = $1
+         WHERE r.user_id = $1 AND r.status <> 'REMOVED'
          ORDER BY r.created_at DESC
          LIMIT $2 OFFSET $3`,
         [userId, limit, offset]
@@ -206,5 +215,88 @@ export class ReviewsRepository {
         totalPages: Math.ceil(total / limit),
       },
     }
+  }
+
+  // ── vendor (shop) reviews — separate from product reviews ──────────────
+
+  // A vendor can be reviewed once per order the customer actually received from them.
+  async checkUserVendorOrder(userId, orderId, vendorId) {
+    const { rows } = await query(
+      `SELECT 1 FROM orders o
+         JOIN seller_orders so ON so.order_id = o.id
+        WHERE o.id = $1 AND o.user_id = $2 AND so.vendor_id = $3
+          AND so.status IN ('DELIVERED', 'CLOSED')`,
+      [orderId, userId, vendorId]
+    )
+    return rows.length > 0
+  }
+
+  async getVendorReviewByOrder(userId, orderId, vendorId) {
+    const { rows } = await query(
+      'SELECT id FROM vendor_reviews WHERE user_id = $1 AND order_id = $2 AND vendor_id = $3',
+      [userId, orderId, vendorId]
+    )
+    return rows[0]
+  }
+
+  async createVendorReview(userId, { vendorId, orderId, rating, comment, status = 'SUBMITTED' }) {
+    const { rows } = await query(
+      `INSERT INTO vendor_reviews (user_id, vendor_id, order_id, rating, comment, status)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, vendor_id, order_id, rating, comment, status, created_at`,
+      [userId, vendorId, orderId, rating, comment || null, status]
+    )
+    return rows[0]
+  }
+
+  async getVendorReviews(vendorId, { offset, limit }) {
+    const [countResult, result, summary] = await Promise.all([
+      query(`SELECT COUNT(*) FROM vendor_reviews WHERE vendor_id = $1 AND status = 'PUBLISHED'`, [vendorId]),
+      query(
+        `SELECT r.id, r.rating, r.comment, r.created_at, r.admin_reply, r.replied_at, u.name AS user_name
+           FROM vendor_reviews r JOIN users u ON u.id = r.user_id
+          WHERE r.vendor_id = $1 AND r.status = 'PUBLISHED'
+          ORDER BY r.created_at DESC LIMIT $2 OFFSET $3`,
+        [vendorId, limit, offset]
+      ),
+      query(`SELECT AVG(rating) AS avg_rating FROM vendor_reviews WHERE vendor_id = $1 AND status = 'PUBLISHED'`, [vendorId]),
+    ])
+    const total = parseInt(countResult.rows[0].count)
+    return {
+      reviews: result.rows,
+      averageRating: parseFloat(summary.rows[0].avg_rating) || 0,
+      pagination: { page: Math.floor(offset / limit) + 1, limit, total, totalPages: Math.ceil(total / limit) },
+    }
+  }
+
+  async getVendorReviewsByOrder(userId, orderId) {
+    const { rows } = await query(
+      `SELECT vendor_id, rating, comment, status, admin_reply FROM vendor_reviews
+        WHERE user_id = $1 AND order_id = $2 AND status <> 'REMOVED'`,
+      [userId, orderId]
+    )
+    return rows
+  }
+
+  // ── reports ────────────────────────────────────────────────────────────
+
+  // Only a published review can be reported (that is the only one anybody sees).
+  // A report raises the review's flag so it surfaces in the moderation queue.
+  async reportReview(kind, reviewId, reporterId, reason) {
+    const table = kind === 'VENDOR' ? 'vendor_reviews' : 'reviews'
+    const { rows } = await query(`SELECT user_id, status FROM ${table} WHERE id = $1`, [reviewId])
+    const review = rows[0]
+    if (!review || review.status !== 'PUBLISHED') return { found: false }
+    if (review.user_id === reporterId) return { found: true, own: true }
+    const ins = await query(
+      `INSERT INTO review_reports (kind, review_id, reporter_id, reason) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (kind, review_id, reporter_id) DO NOTHING RETURNING id`,
+      [kind, reviewId, reporterId, reason]
+    )
+    await query(
+      `UPDATE ${table} SET flagged = TRUE, flag_reason = COALESCE(flag_reason, $2) WHERE id = $1`,
+      [reviewId, reason]
+    )
+    return { found: true, own: false, created: ins.rowCount > 0 }
   }
 }

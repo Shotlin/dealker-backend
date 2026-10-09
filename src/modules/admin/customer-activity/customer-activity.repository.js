@@ -160,7 +160,7 @@ export class CustomerActivityRepository {
 
          UNION ALL
          SELECT 'REVIEW', r.created_at,
-                jsonb_build_object('productName', p.name, 'rating', r.rating, 'comment', r.comment)
+                jsonb_build_object('productName', p.name, 'rating', r.rating, 'comment', r.comment, 'status', r.status)
            FROM reviews r JOIN products p ON p.id = r.product_id
           WHERE r.user_id = $1
 
