@@ -1,7 +1,7 @@
 import { success, error } from '../../utils/apiResponse.js'
 import { NotificationsService } from '../notifications/notifications.service.js'
 import { NotificationsRepository } from '../notifications/notifications.repository.js'
-import { RefundRequestsService, toCustomerView } from './refund-requests.service.js'
+import { RefundRequestsService, toCustomerView, REASON_CODES } from './refund-requests.service.js'
 
 const uuid = { type: 'string', format: 'uuid' }
 
@@ -16,6 +16,20 @@ const createSchema = {
       itemScope: { type: 'string', enum: ['ALL', 'SPECIFIC'] },
       description: { type: 'string', minLength: 3, maxLength: 1000 },
       productIds: { type: 'array', items: uuid, maxItems: 100 },
+      reasonCode: { type: 'string', enum: REASON_CODES },
+      evidence: {
+        type: 'array',
+        maxItems: 8,
+        items: {
+          type: 'object',
+          required: ['url', 'kind'],
+          additionalProperties: false,
+          properties: {
+            url: { type: 'string', format: 'uri', maxLength: 1000 },
+            kind: { type: 'string', enum: ['IMAGE', 'VIDEO'] },
+          },
+        },
+      },
     },
   },
 }

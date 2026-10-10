@@ -95,13 +95,14 @@ export class RefundRequestsRepository {
     const { rows: [row] } = await query(
       `INSERT INTO refund_requests (
          order_id, customer_id, shop_id, scope, items, reason, refund_destination,
-         computed_amount, admin_notes, requested_by, source
-       ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)
+         computed_amount, admin_notes, requested_by, source, reason_code, evidence
+       ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
        RETURNING *`,
       [
         d.orderId, d.customerId, d.shopId || null, d.scope,
         d.items ? JSON.stringify(d.items) : null, d.reason, d.refundDestination,
         d.computedAmount, d.adminNotes || null, d.requestedBy, d.source,
+        d.reasonCode || null, JSON.stringify(d.evidence || []),
       ]
     )
     return row

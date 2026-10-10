@@ -13,6 +13,7 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true })
 export const PUBLIC_BASE = (process.env.UPLOADS_PUBLIC_URL || 'http://localhost:4500/uploads').replace(/\/$/, '')
 const ALLOWED = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }
 
+const VIDEO_TYPES = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' }
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const cloudinaryEnabled = () =>
   Boolean(env.CLOUDINARY_CLOUD_NAME && env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SECRET)
@@ -76,5 +77,36 @@ export default async function localUploadRoutes(fastify) {
     }
     if (!urls.length) return reply.code(400).send({ success: false, message: 'No image received' })
     return { success: true, data: { urls } }
+  })
+  /**
+   * POST /api/v1/uploads/local/video — one evidence video (mp4 / mov / webm) → { url }.
+   * Cloudinary when configured, otherwise local disk (the plain /uploads/video route is Cloudinary-only).
+   */
+  fastify.post('/video', { preHandler: [fastify.authenticate] }, async (req, reply) => {
+    const part = await req.file({ limits: { files: 1, fileSize: env.MAX_VIDEO_FILE_SIZE } })
+    if (!part) return reply.code(400).send({ success: false, message: 'No video received' })
+    const ext = VIDEO_TYPES[part.mimetype]
+    if (!ext) {
+      part.file.resume()
+      return reply.code(400).send({ success: false, message: 'Only MP4, MOV or WebM videos are allowed' })
+    }
+    if (cloudinaryEnabled()) {
+      try {
+        const result = await cloudinaryUploads.uploadVideo(part.file, { folder: `${env.CLOUDINARY_FOLDER}/evidence` })
+        return { success: true, data: { url: result.url } }
+      } catch (err) {
+        req.log.error({ err }, 'Evidence video upload failed')
+        return reply.code(400).send({ success: false, message: 'Failed to upload video' })
+      }
+    }
+    const dir = path.join(UPLOAD_DIR, new Date().toISOString().slice(0, 7))
+    await fs.promises.mkdir(dir, { recursive: true })
+    const name = `${crypto.randomUUID()}.${ext}`
+    await pipeline(part.file, fs.createWriteStream(path.join(dir, name)))
+    if (part.file.truncated) {
+      await fs.promises.unlink(path.join(dir, name)).catch(() => {})
+      return reply.code(413).send({ success: false, message: 'Video is too large' })
+    }
+    return { success: true, data: { url: `${PUBLIC_BASE}/${path.basename(dir)}/${name}` } }
   })
 }

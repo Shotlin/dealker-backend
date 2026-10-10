@@ -9,6 +9,10 @@ function fail(message, code, statusCode = 400) {
   return Object.assign(new Error(message), { code, statusCode })
 }
 
+export const REASON_CODES = [
+  'PRODUCT_NOT_WORKING', 'SCREEN_DISPLAY', 'BATTERY', 'CAMERA', 'WRONG_PRODUCT', 'DEFECTIVE_DAMAGED', 'OTHER',
+]
+
 const money = (n) => Number(Number(n).toFixed(2))
 
 /**
@@ -34,7 +38,27 @@ export function toCustomerView(row) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     resolved_at: row.resolved_at || null,
+    return_number: `RTN${String(row.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`,
+    reason_code: row.reason_code || null,
+    evidence: Array.isArray(row.evidence) ? row.evidence : [],
+    seller_name: row.shop_name || null,
+    refund_reference: approved ? (row.refund_reference || null) : null,
+    refunded_at: row.refunded_at || null,
+    timeline: customerTimeline(row, status),
   }
+}
+
+/** The customer-facing journey, built only from timestamps the row really holds. */
+function customerTimeline(row, status) {
+  const steps = [{ key: 'REQUESTED', title: 'Return Requested', at: row.created_at }]
+  if (status === 'PENDING') steps.push({ key: 'UNDER_REVIEW', title: 'Under Review', at: null, current: true })
+  if (status === 'APPROVED') {
+    steps.push({ key: 'APPROVED', title: 'Return Approved', at: row.resolved_at })
+    steps.push({ key: 'REFUNDED', title: 'Refund Processed', at: row.refunded_at || row.resolved_at })
+  }
+  if (status === 'REJECTED') steps.push({ key: 'REJECTED', title: 'Return Rejected', at: row.resolved_at })
+  if (status === 'CANCELLED') steps.push({ key: 'CANCELLED', title: 'Return Cancelled', at: row.resolved_at })
+  return steps
 }
 
 /**
@@ -203,6 +227,8 @@ export class RefundRequestsService {
         scope,
         items: lines,
         reason: input.description,
+        reasonCode: input.reasonCode,
+        evidence: input.evidence,
         refundDestination: destination,
         computedAmount: amount.toFixed(2),
         adminNotes: input.adminNotes,

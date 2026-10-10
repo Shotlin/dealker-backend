@@ -268,6 +268,13 @@ export const buildApp = async () => {
     },
   );
 
+  // Ola Maps — dashboard-managed key (admin) + keyless proxy for the apps (geocode / reverse / directions / style)
+  {
+    const { olaMapsAdminRoutes, olaMapsPublicRoutes } = await import("./modules/ola-maps/ola-maps.routes.js");
+    await app.register(olaMapsAdminRoutes, { prefix: "/api/v1/admin/ola-maps-settings" });
+    await app.register(olaMapsPublicRoutes, { prefix: "/api/v1/maps/ola" });
+  }
+
   // Shiprocket settings [ADMIN] — dashboard-managed API-user credentials
   await app.register(import("./modules/shiprocket/shiprocket.routes.js"), {
     prefix: "/api/v1/admin/shiprocket",
