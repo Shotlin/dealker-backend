@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { withCardFields } from '../../utils/product-card-fields.js'
 import { query } from '../../config/database.js'
 import { redis } from '../../config/redis.js'
 import { success, error } from '../../utils/apiResponse.js'
@@ -867,7 +868,7 @@ async function getProductsByIds(productIds, allocatedShopIds = null, priceMode =
     params
   )
 
-  return rows
+  return withCardFields(rows)
 }
 
 /**
@@ -993,7 +994,7 @@ export async function getProductsByCategoryIds(categoryIds, limit, excludeIds = 
     params
   )
 
-  return rows
+  return withCardFields(rows)
 }
 
 async function getFeaturedProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
@@ -1059,7 +1060,7 @@ async function getFeaturedProducts(limit, allocatedShopIds = null, priceMode = '
     params
   )
 
-  return rows
+  return withCardFields(rows)
 }
 
 async function getDealProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
@@ -1126,7 +1127,7 @@ async function getDealProducts(limit, allocatedShopIds = null, priceMode = 'reta
     params
   )
 
-  return rows
+  return withCardFields(rows)
 }
 
 async function getTrendingProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
@@ -1191,7 +1192,7 @@ async function getTrendingProducts(limit, allocatedShopIds = null, priceMode = '
     params
   )
 
-  return rows
+  return withCardFields(rows)
 }
 
 async function getDefaultCategorySections(limitSections, itemsPerSection, allocatedShopIds = null, priceMode = 'retail') {
