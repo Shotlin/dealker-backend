@@ -16,6 +16,7 @@
     "db:migrate": "node src/database/migrate.js",
     "db:seed": "node src/database/seeds/run.js",
     "seed:sell-demo": "node src/database/seeds/sell-exchange-demo.js",
+    "seed:auction-demo": "node src/database/seeds/auction-demo.js",
     "seed:stores": "node scripts/seed-store-tabs.js",
     "test": "vitest run",
     "test:watch": "vitest",

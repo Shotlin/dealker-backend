@@ -43,6 +43,10 @@ const clientCtx = (request) => ({
 
 export async function auctionsRoutes(fastify) {
   const auth = [fastify.authenticate]
+  // Browsing live auctions is open to guests (home page); a token, when sent, is still fully validated.
+  const optionalAuth = [async (request, reply) => {
+    if (request.headers.authorization || request.cookies?.accessToken) return fastify.authenticate(request, reply)
+  }]
 
   fastify.get('/info', { preHandler: auth }, wrap(async () => {
     const s = await getSettings()
@@ -56,9 +60,9 @@ export async function auctionsRoutes(fastify) {
     }
   }))
 
-  fastify.get('/', { preHandler: auth }, wrap(async (request) => {
+  fastify.get('/', { preHandler: optionalAuth }, wrap(async (request) => {
     const { tab = 'live', q = '', categoryId = null, page = 1, limit = 20 } = request.query || {}
-    return bidding.listPublic(request.user.id, {
+    return bidding.listPublic(request.user?.id ?? null, {
       tab, q: String(q).slice(0, 100), categoryId, page: Math.max(1, Number(page)), limit: Math.min(50, Number(limit) || 20),
     })
   }))
