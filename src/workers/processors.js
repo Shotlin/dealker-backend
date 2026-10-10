@@ -198,7 +198,7 @@ async function handleScheduledActivation({ themeId }) {
     const shouldUpdateActiveFlag =
       theme.tab_key === 'all' &&
       theme.ab_variant === 'A' &&
-      theme.store_key === 'marketplace'
+      theme.store_key === 'mobile'
 
     if (shouldUpdateActiveFlag) {
       // Scoped to the same shop bucket (NULL-safe) — see themes.repository.js#activate.
@@ -233,14 +233,14 @@ async function handleScheduledActivation({ themeId }) {
     if (io) {
       io.to('themes:live').emit('theme:update', {
         tabKey: theme.tab_key,
-        storeKey: theme.store_key || 'marketplace',
+        storeKey: theme.store_key || 'mobile',
         themeId,
         timestamp: new Date().toISOString(),
       })
-      logger.info({ tabKey: theme.tab_key, storeKey: theme.store_key || 'marketplace', themeId }, 'Theme update broadcasted to all users')
+      logger.info({ tabKey: theme.tab_key, storeKey: theme.store_key || 'mobile', themeId }, 'Theme update broadcasted to all users')
     }
 
-    logger.info({ themeId, tabKey: theme.tab_key, storeKey: theme.store_key || 'marketplace' }, 'Theme auto-activated by schedule')
+    logger.info({ themeId, tabKey: theme.tab_key, storeKey: theme.store_key || 'mobile' }, 'Theme auto-activated by schedule')
   } catch (err) {
     await client.query('ROLLBACK')
     logger.error({ err, themeId }, 'Scheduled activation failed')
@@ -348,7 +348,7 @@ async function handleApplySectionLayout({ versionId, tabId }) {
     if (io) {
       io.to('themes:live').emit('section:update', {
         tab_key: version.tab_key,
-        store_key: version.store_key || 'marketplace',
+        store_key: version.store_key || 'mobile',
         action: 'schedule',
         timestamp: new Date().toISOString(),
       })

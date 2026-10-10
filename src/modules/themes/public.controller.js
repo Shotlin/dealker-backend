@@ -9,7 +9,7 @@ import {
   getTabHomeCacheKey,
   getTabManifestCacheKey,
 } from './theme-cache.js'
-import { STORE_KEYS } from '../theme-tabs/theme-tabs.shared.js'
+import { STORE_KEYS, DEFAULT_STORE_KEY } from '../theme-tabs/theme-tabs.shared.js'
 import { FeeSettingsService } from '../fee-settings/fee-settings.service.js'
 import { AllocationService } from '../allocation/allocation.service.js'
 import { AllocationRepository } from '../allocation/allocation.repository.js'
@@ -511,8 +511,10 @@ export class PublicThemeController {
 }
 
 function normalizeStoreKey(storeKey) {
-  const normalized = `${storeKey || 'marketplace'}`.trim()
-  return STORE_KEYS.includes(normalized) ? normalized : 'marketplace'
+  const normalized = `${storeKey || DEFAULT_STORE_KEY}`.trim()
+  // Older app builds still ask for 'marketplace' — it now lives under Mobile.
+  if (normalized === 'marketplace') return DEFAULT_STORE_KEY
+  return STORE_KEYS.includes(normalized) ? normalized : DEFAULT_STORE_KEY
 }
 
 // Cache-key suffix for the customer's shop-visibility bucket — 'unscoped'

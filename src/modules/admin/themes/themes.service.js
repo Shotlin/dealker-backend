@@ -33,7 +33,7 @@ function broadcastThemeUpdate(theme, themeId) {
     return
   }
 
-  const storeKey = theme.store_key || 'marketplace'
+  const storeKey = theme.store_key || 'mobile'
   // null shopId = the shop-less/global theme changed, which can cascade to
   // any shop without its own override — clients must not narrow on that.
   const shopId = theme.shop_id ?? null

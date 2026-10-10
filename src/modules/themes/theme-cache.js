@@ -18,7 +18,7 @@ export function getAdminTabThemesCacheKey(storeKey = 'all', status = 'all') {
   return `${ADMIN_TAB_THEMES_CACHE_PREFIX}:${storeKey}:${status}`
 }
 
-export function getTabManifestCacheKey(storeKey = 'marketplace', shopId = null) {
+export function getTabManifestCacheKey(storeKey = 'mobile', shopId = null) {
   // The same visual store can have a different theme for each fulfilment
   // shop. Never let a cached Kolkata manifest be returned to another shop.
   return `${TAB_MANIFEST_CACHE_PREFIX}:${storeKey}:${shopId || 'global'}`
@@ -28,10 +28,10 @@ export function getSectionCacheKey(tabId) {
   return `${SECTION_CACHE_PREFIX}:${tabId}`
 }
 
-export function getSectionPublicCacheKey(storeKey = 'marketplace', tabKey = 'all') {
+export function getSectionPublicCacheKey(storeKey = 'mobile', tabKey = 'all') {
   return `${SECTION_PUBLIC_CACHE_PREFIX}:${storeKey}:${tabKey}`
 }
 
-export function getTabHomeCacheKey(storeKey = 'marketplace', key = 'all') {
+export function getTabHomeCacheKey(storeKey = 'mobile', key = 'all') {
   return `${TAB_HOME_CACHE_PREFIX}:${storeKey}:${key}`
 }

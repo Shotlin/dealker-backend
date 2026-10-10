@@ -1,4 +1,4 @@
-import { STORE_KEYS, TAB_STATUSES } from '../../../modules/theme-tabs/theme-tabs.shared.js'
+import { ADMIN_STORE_KEYS, TAB_STATUSES } from '../../../modules/theme-tabs/theme-tabs.shared.js'
 
 const merchSectionSchema = {
   type: 'object',
@@ -59,7 +59,7 @@ export const listThemeTabsSchema = {
   querystring: {
     type: 'object',
     properties: {
-      store_key: { type: 'string', enum: STORE_KEYS },
+      store_key: { type: 'string', enum: ADMIN_STORE_KEYS },
       status: { type: 'string', enum: TAB_STATUSES },
     },
   },
@@ -70,7 +70,7 @@ export const createThemeTabSchema = {
     type: 'object',
     required: ['store_key', 'key', 'label'],
     properties: {
-      store_key: { type: 'string', enum: STORE_KEYS },
+      store_key: { type: 'string', enum: ADMIN_STORE_KEYS },
       key: { type: 'string', minLength: 1, maxLength: 50 },
       label: { type: 'string', minLength: 1, maxLength: 100 },
       image_url: { type: ['string', 'null'] },
@@ -88,7 +88,7 @@ export const updateThemeTabSchema = {
   body: {
     type: 'object',
     properties: {
-      store_key: { type: 'string', enum: STORE_KEYS },
+      store_key: { type: 'string', enum: ADMIN_STORE_KEYS },
       key: { type: 'string', minLength: 1, maxLength: 50 },
       label: { type: 'string', minLength: 1, maxLength: 100 },
       image_url: { type: ['string', 'null'] },

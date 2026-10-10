@@ -282,7 +282,7 @@ export class ThemesRepository {
       const shouldUpdateActiveFlag =
         existing.tab_key === 'all' &&
         existing.ab_variant === 'A' &&
-        existing.store_key === 'marketplace'
+        existing.store_key === 'mobile'
 
       if (shouldUpdateActiveFlag) {
         // Scoped to the same shop bucket (NULL-safe) so activating one

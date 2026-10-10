@@ -1,4 +1,7 @@
 export const STORE_KEYS = ['mobile', 'mobile_part', 'accessories', 'electronics', 'repellents', 'marketplace', 'deals', 'brand_store', 'new_arrivals']
+/** Store keys the dashboard may create/edit. Marketplace was merged into Mobile (migration 194). */
+export const ADMIN_STORE_KEYS = STORE_KEYS.filter((k) => k !== 'marketplace')
+export const DEFAULT_STORE_KEY = 'mobile'
 export const TAB_STATUSES = ['active', 'archived']
 
 export function getDefaultMerchConfig() {
