@@ -34,3 +34,6 @@ docker-compose.override.yml
 
 # Private invoice storage
 private-uploads/
+
+# production secrets (never commit)
+deploy/production/*.env
