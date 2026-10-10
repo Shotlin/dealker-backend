@@ -17,6 +17,7 @@
     "db:seed": "node src/database/seeds/run.js",
     "seed:sell-demo": "node src/database/seeds/sell-exchange-demo.js",
     "seed:auction-demo": "node src/database/seeds/auction-demo.js",
+    "seed:mobile-tabs": "node src/database/seeds/mobile-store-tabs.js",
     "seed:stores": "node scripts/seed-store-tabs.js",
     "test": "vitest run",
     "test:watch": "vitest",
