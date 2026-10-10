@@ -73,7 +73,7 @@ export const orderOverview = {
     const coupon = o.coupon_code ? (await query(`SELECT code, description, discount_type, discount_value, max_discount, min_order_amount, coupon_type, absorber FROM coupons WHERE code = $1`, [o.coupon_code])).rows[0] ?? null : null
     const cashback = (await query(`SELECT amount, status, credit_trigger, source_type, created_at, credited_at FROM cashback_transactions WHERE order_id = $1 ORDER BY created_at`, [orderId])).rows
     const refunds = (await query(
-      `SELECT r.id, r.status, r.scope, r.items, r.source, r.reason, r.computed_amount, r.resolved_amount, r.refund_destination, r.created_at, r.resolved_at, r.refunded_at, r.admin_notes,
+      `SELECT r.id, r.status, r.scope, r.items, r.source, r.reason, r.computed_amount, r.resolved_amount, r.refund_destination, r.created_at, r.resolved_at, r.refunded_at, r.admin_notes, r.reason_code, r.evidence,
               ru.name AS resolved_by_name, (SELECT COALESCE(SUM(-l.amount),0) FROM settlement_ledger l WHERE l.idempotency_key LIKE 'refund:' || r.id || ':%') AS seller_reversal
          FROM refund_requests r LEFT JOIN users ru ON ru.id = r.resolved_by WHERE r.order_id = $1 ORDER BY r.created_at`, [orderId])).rows
     const tickets = (await query(`SELECT id, ticket_number, subject, status, created_at FROM support_tickets WHERE order_id = $1 ORDER BY created_at DESC`, [orderId])).rows
