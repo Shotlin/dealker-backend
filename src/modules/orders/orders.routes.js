@@ -93,6 +93,43 @@ export async function ordersRoutes(fastify) {
   })
 
   // 5. Get Order by ID
+  // Courier shipments of one order (Shiprocket / Porter / Blue Dart / self): status steps, AWB, tracking link.
+  // Status only — no rider or live-location data. Scoped to the signed-in customer's own order.
+  fastify.get('/:orderId/shipments', {
+    preHandler: [fastify.authenticate],
+    schema: { params: { type: 'object', required: ['orderId'], properties: { orderId: { type: 'string', format: 'uuid' } } } },
+  }, async (request, reply) => {
+    const { query } = await import('../../config/database.js')
+    const userId = request.userId || request.user.id
+    const { rows: own } = await query(`SELECT id FROM orders WHERE id = $1 AND customer_id = $2`, [request.params.orderId, userId])
+    if (!own[0]) return reply.code(404).send({ success: false, message: 'Order not found', code: 'NOT_FOUND' })
+    const { rows } = await query(
+      `SELECT so.seller_order_number, v.name AS seller_name, s.id, s.provider, s.awb, s.courier_name, s.status, s.estimated_delivery, s.tracking_url, s.updated_at
+         FROM seller_orders so
+         JOIN shipments s ON s.seller_order_id = so.id
+         LEFT JOIN vendors v ON v.id = so.vendor_id
+        WHERE so.order_id = $1 ORDER BY so.created_at`, [request.params.orderId])
+    const ids = rows.map((r) => r.id)
+    const events = ids.length
+      ? (await query(`SELECT shipment_id, status, note, event_location, occurred_at FROM shipment_events WHERE shipment_id = ANY($1::uuid[]) ORDER BY occurred_at, id`, [ids])).rows
+      : []
+    return {
+      success: true,
+      data: rows.map((r) => ({
+        parcel: r.seller_order_number,
+        seller_name: r.seller_name || null,
+        provider: r.provider,
+        courier_name: r.courier_name,
+        awb: r.awb,
+        status: r.status,
+        estimated_delivery: r.estimated_delivery,
+        tracking_url: r.tracking_url,
+        updated_at: r.updated_at,
+        events: events.filter((e) => e.shipment_id === r.id).map((e) => ({ status: e.status, note: e.note, location: e.event_location, at: e.occurred_at })),
+      })),
+    }
+  })
+
   fastify.get('/:orderId', {
     preHandler: [fastify.authenticate],
     handler: controller.getOrderById,

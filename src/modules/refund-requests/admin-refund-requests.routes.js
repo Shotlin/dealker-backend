@@ -1,5 +1,6 @@
 import { query, getClient } from '../../config/database.js'
 import { refundCaseService } from './refund-case.service.js'
+import { ReturnJourneyService } from './return-journey.service.js'
 
 /**
  * Admin refund-request review — mounted at /api/v1/admin/refund-requests.
@@ -80,7 +81,10 @@ export default async function adminRefundRequestRoutes(fastify) {
         await client.query('ROLLBACK')
         return reply.code(409).send({ success: false, message: `Request already ${r.status.toLowerCase()}` })
       }
-      const amount = Number(r.computed_amount)
+      // After a quality check the customer may have accepted a lower price: refund exactly that.
+      // Throws 409 QC_PRICE_PENDING while the customer still has to answer.
+      const qcAmount = await new ReturnJourneyService().approvalAmount(r.id)
+      const amount = qcAmount != null ? qcAmount : Number(r.computed_amount)
       await client.query(
         `UPDATE refund_requests SET status = 'APPROVED', refund_destination = $2, resolved_amount = $3, resolved_by = $4,
                 resolved_at = NOW(), refunded_at = NOW(), updated_at = NOW() WHERE id = $1`,
@@ -121,6 +125,7 @@ export default async function adminRefundRequestRoutes(fastify) {
       await client.query('COMMIT')
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {})
+      if (e?.statusCode && e.statusCode < 500) return reply.code(e.statusCode).send({ success: false, message: e.message, code: e.code })
       throw e
     } finally { client.release() }
     const { rows } = await query(`${SELECT} WHERE r.id = $1`, [req.params.id])

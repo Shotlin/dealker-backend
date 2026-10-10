@@ -302,6 +302,17 @@ export class ShippingService {
     }
   }
 
+  /** Track any AWB with a provider adapter (used for return pickups, which are not seller-order shipments). */
+  async trackByAwb(provider, awb) {
+    const adapter = await this.#adapter(provider)
+    return adapter.trackShipment({ awb })
+  }
+
+  async mapProviderStatus(provider, providerStatus) {
+    const adapter = await this.#adapter(provider)
+    return adapter.mapStatus(providerStatus)
+  }
+
   async cancelShipment(shipmentId, actorId = null) {
     const { rows } = await query(`SELECT * FROM shipments WHERE id = $1 LIMIT 1 FOR UPDATE`, [shipmentId])
     const shipment = rows[0]
@@ -334,7 +345,12 @@ export class ShippingService {
       [awb || null, providerShipmentId]
     )
     const shipment = rows[0]
-    if (!shipment) return { matched: false }
+    if (!shipment) {
+      // Not a seller-order shipment — it may be the courier pickup of a customer return.
+      const { ReturnJourneyService } = await import('../refund-requests/return-journey.service.js')
+      const matched = await new ReturnJourneyService({ shipping: this }).applyWebhook(provider, payload)
+      return { matched, return_pickup: matched }
+    }
     const adapter = await this.#adapter(provider)
     const mapped = adapter.mapStatus(payload.current_status || payload.status)
     await this.#appendEvent(shipment.id, mapped || 'PROVIDER_UPDATE', payload.current_status || payload.status, payload.remark || payload.comment || null, payload.location || null)

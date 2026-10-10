@@ -4,6 +4,7 @@ import { NotificationsRepository } from '../notifications/notifications.reposito
 import { RefundRequestsService, toCustomerView, REASON_CODES } from './refund-requests.service.js'
 
 const uuid = { type: 'string', format: 'uuid' }
+const idParams = { type: 'object', required: ['id'], properties: { id: uuid } }
 
 const createSchema = {
   tags: ['Refund Requests'],
@@ -70,6 +71,30 @@ export default async function refundRequestRoutes(fastify) {
     const view = await service.getForCustomerByOrder(req.params.orderId, userId(req))
     // `data: null` (not a 404) when none exists yet — the app treats that as "no request".
     return reply.code(200).send(success(view, view ? 'Refund request fetched' : 'No refund request for this order'))
+  })
+
+  // Return policy shown in the app (window days, free pickup, rules) — editable in the dashboard.
+  fastify.get('/policy', auth, async (_req, reply) => reply.code(200).send(success(await service.journey.getSettings(), 'Return policy')))
+
+  fastify.post('/:id/qc/accept', { ...auth, schema: { tags: ['Refund Requests'], params: idParams } }, async (req, reply) => {
+    try {
+      await service.journey.acceptPrice(req.params.id, userId(req))
+      return reply.code(200).send(success(await service.customerView(req.params.id, userId(req)), 'New price accepted'))
+    } catch (err) {
+      return sendRefundError(reply, err)
+    }
+  })
+
+  fastify.post('/:id/qc/clarify', {
+    ...auth,
+    schema: { tags: ['Refund Requests'], params: idParams, body: { type: 'object', properties: { message: { type: 'string', maxLength: 1000 } } } },
+  }, async (req, reply) => {
+    try {
+      await service.journey.clarifyPrice(req.params.id, userId(req), req.body?.message)
+      return reply.code(200).send(success(await service.customerView(req.params.id, userId(req)), 'Question sent'))
+    } catch (err) {
+      return sendRefundError(reply, err)
+    }
   })
 
   fastify.post('/:id/cancel', {

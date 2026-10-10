@@ -282,4 +282,30 @@ export class QcService {
     const r = rows[0]
     return { ...r, price: Number(r.price), mrp: r.mrp != null ? Number(r.mrp) : null, events, live }
   }
+
+  /**
+   * Customer-facing QC report for a product page — only for a listing that has PASSED QC (customers never see
+   * failures). Built from real data: the latest QC run's rule results (IMEI, photos, invoice, condition, price),
+   * plus battery health / condition recorded on the product. Returns null when there is nothing to show.
+   */
+  async publicReport(productId) {
+    const { rows } = await query(
+      `SELECT sp.id, sp.qc_score, sp.qc_checked_at, p.condition, p.battery_health
+         FROM shop_products sp JOIN products p ON p.id = sp.product_id
+        WHERE p.id = $1 AND sp.deleted_at IS NULL AND sp.approval_status = 'APPROVED' AND sp.qc_status = 'QC_PASSED'
+        ORDER BY sp.qc_checked_at DESC NULLS LAST LIMIT 1`, [productId])
+    const r = rows[0]
+    if (!r) return null
+    const ev = (await query(
+      `SELECT results FROM listing_qc_events WHERE shop_product_id = $1 AND to_status = 'QC_PASSED' AND results IS NOT NULL
+        ORDER BY created_at DESC, id DESC LIMIT 1`, [r.id])).rows[0]
+    const checks = []
+    for (const x of Array.isArray(ev?.results) ? ev.results : []) {
+      if (x.status === 'SKIP') continue
+      checks.push({ label: x.label, value: x.detail || (x.status === 'PASS' ? 'Passed' : 'Checked'), ok: x.status === 'PASS' })
+    }
+    if (r.battery_health != null) checks.push({ label: 'Battery', value: `Health ${r.battery_health}%`, ok: Number(r.battery_health) >= 80 })
+    if (!checks.length) return null
+    return { status: 'QC_PASSED', score: r.qc_score, checkedAt: r.qc_checked_at, condition: r.condition, checks }
+  }
 }

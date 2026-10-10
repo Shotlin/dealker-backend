@@ -10,7 +10,7 @@ import { STORE_INFO } from '../config/storeInfo.js'
 // returning anything (GET /orders/:id/quality-videos), so the QR text
 // itself carries no access on its own.
 function buildOrderQrPayload(order) {
-  return `FRESHCUTS-ORDER|${order.order_number || order.orderNumber}|${order.id}`
+  return `DEALKER-ORDER|${order.order_number || order.orderNumber}|${order.id}`
 }
 
 const TERMINAL_BANNER_STATUS = new Set(['CANCELLED', 'REFUNDED'])
@@ -422,7 +422,7 @@ function drawQrCode(doc, qrBuffer) {
   doc.image(qrBuffer, qrX, doc.y, { width: qrSize, height: qrSize })
   doc.y += qrSize + 6
   doc.font('Helvetica').fontSize(7)
-    .text('Scan with the FreshCuts app to watch how this order was cleaned & packed', PAGE_LEFT, doc.y, { width: PAGE_WIDTH, align: 'center' })
+    .text('Scan with the Dealker app to track this order', PAGE_LEFT, doc.y, { width: PAGE_WIDTH, align: 'center' })
 }
 
 function renderReceipt(doc, order, address, items, { title, qrBuffer }) {

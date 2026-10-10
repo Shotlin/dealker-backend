@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
  * Registered business details printed on every invoice / packing slip.
  */
 export const STORE_INFO = {
-  name: 'FreshCuts',
+  name: 'Dealker',
   // ⚠ Still the leftover "Bakaloo"/Surat business-registration details from
   // before the FreshCuts rebrand — genuinely wrong on every real invoice/
   // packing slip printed today, but these are legal/compliance fields

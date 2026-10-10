@@ -210,6 +210,15 @@ export default async function productRoutes(fastify) {
     controller.getOne.bind(controller),
   );
 
+  // GET /:id/qc — customer-facing QC report (null data when the listing has not passed QC)
+  fastify.get("/:id/qc", async (request, reply) => {
+    const id = String(request.params.id);
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(200).send(success(null, "No QC report"));
+    const { QcService } = await import("../qc/qc.service.js");
+    const report = await new QcService().publicReport(id);
+    return reply.code(200).send(success(report, report ? "QC report" : "No QC report"));
+  });
+
   // GET /:id/related — Related products
   fastify.get(
     "/:id/related",

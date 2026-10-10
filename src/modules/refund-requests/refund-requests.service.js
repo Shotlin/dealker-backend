@@ -2,6 +2,7 @@ import { logAdminActivity } from '../../utils/activityLogger.js'
 import { logger } from '../../config/logger.js'
 import { RefundRequestsRepository } from './refund-requests.repository.js'
 import { publishOrderStatus, publishRefundStatus } from '../orders/order-events.js'
+import { ReturnJourneyService } from './return-journey.service.js'
 
 const RETURN_ELIGIBLE_ORDER_STATUSES = ['DELIVERED']
 
@@ -20,7 +21,7 @@ const money = (n) => Number(Number(n).toFixed(2))
  * `RefundRequestRemoteDataSource._parseStatus` reads. `PROCESSING` (the
  * transient money-movement claim) is shown as `PENDING`.
  */
-export function toCustomerView(row) {
+export function toCustomerView(row, extras = {}) {
   if (!row) return null
   const status = row.status === 'PROCESSING' ? 'PENDING' : row.status
   const approved = status === 'APPROVED'
@@ -44,18 +45,31 @@ export function toCustomerView(row) {
     seller_name: row.shop_name || null,
     refund_reference: approved ? (row.refund_reference || null) : null,
     refunded_at: row.refunded_at || null,
-    timeline: customerTimeline(row, status),
+    return_approved_at: row.return_approved_at || null,
+    pickup: extras.pickup || null,
+    qc: extras.qc || null,
+    timeline: customerTimeline(row, status, extras),
   }
 }
 
-/** The customer-facing journey, built only from timestamps the row really holds. */
-function customerTimeline(row, status) {
+/** The customer-facing journey, built only from timestamps the data really holds. */
+function customerTimeline(row, status, { pickup = null, qc = null } = {}) {
   const steps = [{ key: 'REQUESTED', title: 'Return Requested', at: row.created_at }]
-  if (status === 'PENDING') steps.push({ key: 'UNDER_REVIEW', title: 'Under Review', at: null, current: true })
-  if (status === 'APPROVED') {
-    steps.push({ key: 'APPROVED', title: 'Return Approved', at: row.resolved_at })
-    steps.push({ key: 'REFUNDED', title: 'Refund Processed', at: row.refunded_at || row.resolved_at })
+  const closed = ['REJECTED', 'CANCELLED'].includes(status)
+  if (!closed) {
+    if (row.return_approved_at) steps.push({ key: 'RETURN_APPROVED', title: 'Return Approved', at: row.return_approved_at })
+    if (pickup?.scheduled_at || pickup) steps.push({ key: 'PICKUP_SCHEDULED', title: 'Pickup Scheduled', at: pickup.scheduled_at || row.return_approved_at })
+    if (pickup?.picked_up_at) steps.push({ key: 'PICKED_UP', title: 'Item Picked Up', at: pickup.picked_up_at })
+    if (pickup?.received_at) steps.push({ key: 'RECEIVED', title: 'Received at Center', at: pickup.received_at })
+    if (qc) steps.push({ key: 'QC_DONE', title: 'QC Completed', at: qc.inspected_at })
+    if (qc?.price_status === 'ACCEPTED') steps.push({ key: 'PRICE_ACCEPTED', title: 'New Price Accepted', at: qc.responded_at })
   }
+  if (status === 'PENDING') {
+    const waiting = qc && ['PROPOSED', 'CLARIFICATION'].includes(qc.price_status)
+    steps.push({ key: waiting ? 'PRICE_CONFIRMATION' : 'UNDER_REVIEW', title: waiting ? 'Confirm New Price' : 'Under Review', at: null, current: true })
+  }
+  if (status === 'APPROVED' && !row.return_approved_at) steps.push({ key: 'APPROVED', title: 'Return Approved', at: row.resolved_at })
+  if (status === 'APPROVED') steps.push({ key: 'REFUNDED', title: 'Refund Processed', at: row.refunded_at || row.resolved_at })
   if (status === 'REJECTED') steps.push({ key: 'REJECTED', title: 'Return Rejected', at: row.resolved_at })
   if (status === 'CANCELLED') steps.push({ key: 'CANCELLED', title: 'Return Cancelled', at: row.resolved_at })
   return steps
@@ -73,13 +87,14 @@ function customerTimeline(row, status) {
  * claim, and the amount is always server-computed from the real order.
  */
 export class RefundRequestsService {
-  constructor({ repository, fastify, notifier, paymentsService, adminOrdersRepo, customersRepo } = {}) {
+  constructor({ repository, fastify, notifier, paymentsService, adminOrdersRepo, customersRepo, journey } = {}) {
     this.repo = repository || new RefundRequestsRepository()
     this.fastify = fastify || null
     this.notifier = notifier || null
     this._paymentsService = paymentsService || null
     this._adminOrdersRepo = adminOrdersRepo || null
     this._customersRepo = customersRepo || null
+    this.journey = journey || new ReturnJourneyService({ notifier: this.notifier })
   }
 
   async #payments() {
@@ -133,7 +148,17 @@ export class RefundRequestsService {
   }
 
   async getForCustomerByOrder(orderId, customerId) {
-    return toCustomerView(await this.repo.findLatestByOrder(orderId, customerId))
+    const row = await this.repo.findLatestByOrder(orderId, customerId)
+    if (!row) return null
+    const j = await this.journey.journey(row.id)
+    return toCustomerView(row, j)
+  }
+
+  /** The customer's own request, as the app sees it (used after QC actions). */
+  async customerView(id, customerId) {
+    const row = await this.repo.findById(id)
+    if (!row || row.customer_id !== customerId) throw fail('Refund request not found', 'NOT_FOUND', 404)
+    return toCustomerView(row, await this.journey.journey(id))
   }
 
   // ─── Create ─────────────────────────────────────────────────────────
@@ -203,6 +228,7 @@ export class RefundRequestsService {
       throw fail('Order not found', 'ORDER_NOT_FOUND', 404)
     }
     if (actor.role === 'ADMIN') this.assertShopAccess({ shop_id: order.shop_id }, actor.shopId)
+    if (actor.role === 'CUSTOMER') await this.journey.assertInsideWindow(order)
     if (!RETURN_ELIGIBLE_ORDER_STATUSES.includes(order.status)) {
       throw fail(
         `Refunds can only be requested for delivered orders (this one is ${order.status}).`,
@@ -329,10 +355,16 @@ export class RefundRequestsService {
       throw fail('No online payment on this order to refund to the original method — refund to Wallet instead.', 'NO_GATEWAY_PAYMENT')
     }
 
+    // A quality check may have changed the price: refund exactly what the customer accepted.
+    const qcAmount = await this.journey.approvalAmount(id)
+    if (qcAmount != null && qcAmount > money(current.computed_amount)) {
+      throw fail('The revised price is higher than the original amount.', 'INVALID_REVISED_PRICE')
+    }
+
     const claimed = await this.repo.claimForProcessing(id, destination)
     if (!claimed) throw fail('This request is already being processed', 'REFUND_NOT_PENDING', 409)
 
-    const amount = money(claimed.computed_amount)
+    const amount = qcAmount != null ? qcAmount : money(claimed.computed_amount)
     const isFull = claimed.scope === 'FULL_ORDER'
     let reference = null
     try {
@@ -392,7 +424,7 @@ export class RefundRequestsService {
     publishRefundStatus(full, { io: this.fastify?.io, event: 'REFUND_APPROVED' })
     await this.#notifyCustomer(full, {
       title: '💰 Refund approved',
-      body: `₹${amount} ${destination === 'WALLET' ? 'was added to your FreshCuts wallet' : 'is being refunded to your original payment method'} for order ${full.order_number}.`,
+      body: `₹${amount} ${destination === 'WALLET' ? 'was added to your Dealker wallet' : 'is being refunded to your original payment method'} for order ${full.order_number}.`,
       // Wallet balance changed too — mobile's wallet refresh keys off type.
       type: 'ORDER_STATUS',
     })

@@ -66,7 +66,7 @@ export class RefundRequestsRepository {
   async findOrderForRefund(orderId) {
     const { rows: [order] } = await query(
       `SELECT id, order_number, customer_id, shop_id, status, payment_status,
-              payment_method, total_payable
+              payment_method, total_payable, delivered_at
          FROM orders WHERE id = $1`,
       [orderId]
     )

@@ -84,7 +84,7 @@ export class ProcurementNotifier {
       recipients.map((r) => r.vendor_id),
       {
         title: 'New procurement requirement',
-        body: `${shopName || 'A FreshCuts store'} published ${requestNumber} — respond before the deadline.`,
+        body: `${shopName || 'A Dealker store'} published ${requestNumber} — respond before the deadline.`,
         data: { event: 'request_published', request_id: requestId, request_number: requestNumber, mode },
         // A new requirement is the one event the vendor app rings a loud,
         // looping in-app alert for while running (ProcurementAlertListener)
