@@ -23,6 +23,8 @@ export const DEFAULT_RULES = Object.freeze({
   noBill: 4,
   noBox: 2,
   noCharger: 3,
+  faceIdIssue: 10,
+  cameraIssue: 8,
   // condition bands: total deduction % at or below → grade
   excellentMaxPct: 8,
   goodMaxPct: 22,
@@ -60,6 +62,9 @@ export function parseQa(raw) {
     chargerAvailable: bool(raw.chargerAvailable, 'chargerAvailable'),
     batteryHealth,
     powersOn: bool(raw.powersOn, 'powersOn'),
+    // Optional (older clients never send them): extra faults from the Exchange "Device Issues" checklist.
+    faceIdIssue: raw.faceIdIssue == null ? false : bool(raw.faceIdIssue, 'faceIdIssue'),
+    cameraIssue: raw.cameraIssue == null ? false : bool(raw.cameraIssue, 'cameraIssue'),
   }
 }
 
@@ -85,6 +90,8 @@ export function valuate(base, qa, overrides = {}, maxTotalPct = 85) {
   if (qa.bodyDents) d.push({ label: 'Body dents / damage', pct: r.bodyDents })
   if (qa.screenReplaced) d.push({ label: 'Screen replaced', pct: r.screenReplaced })
   if (qa.skinReplaced) d.push({ label: 'Skin / back panel replaced', pct: r.skinReplaced })
+  if (qa.faceIdIssue) d.push({ label: 'Face ID / fingerprint issue', pct: r.faceIdIssue })
+  if (qa.cameraIssue) d.push({ label: 'Camera issue', pct: r.cameraIssue })
   if (qa.batteryHealth < r.batteryHealthFloor) {
     d.push({ label: `Battery health ${qa.batteryHealth}%`, pct: Math.round((r.batteryHealthFloor - qa.batteryHealth) * r.batteryPctPerPoint) })
   }

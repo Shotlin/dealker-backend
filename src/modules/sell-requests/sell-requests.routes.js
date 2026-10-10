@@ -62,6 +62,9 @@ function customerRoutes(scopeKind) {
     const auth = [fastify.authenticate]
     const customer = (request) => ({ kind: 'CUSTOMER', scopeKind, userId: request.user.id })
 
+    // Public (guests see it on the product page): is trade-in on, and the best value a customer could get.
+    fastify.get('/summary', wrap(async () => ok(await svc.publicSummary())))
+
     fastify.get('/catalog', { preHandler: auth }, wrap(async () => ok(await svc.listModels())))
 
     fastify.post('/quote', { preHandler: auth }, wrap(async (request) => {

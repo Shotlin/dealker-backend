@@ -149,6 +149,7 @@ export async function updateSettings(actor, input) {
 const serializeModel = (m) => ({
   id: m.id, name: m.name, category: m.category, variants: m.variants, colors: m.colors,
   basePrice: num(m.base_price), isActive: m.is_active,
+  brand: m.brand || null, brandLogoUrl: m.brand_logo_url || null, imageUrl: m.image_url || null,
 })
 
 export async function listModels({ includeInactive = false } = {}) {
@@ -156,6 +157,13 @@ export async function listModels({ includeInactive = false } = {}) {
     `SELECT * FROM sell_device_models ${includeInactive ? '' : 'WHERE is_active = TRUE'} ORDER BY (category <> 'Smartphone'), category, name`
   )
   return rows.map(serializeModel)
+}
+
+/** Guest-safe teaser for the "Exchange & Save More" card: on/off + the highest base value of any accepted smartphone. */
+export async function publicSummary() {
+  const settings = await getSettings()
+  const { rows } = await query(`SELECT MAX(base_price) AS max_value, COUNT(*)::int AS models FROM sell_device_models WHERE is_active = TRUE AND category = 'Smartphone'`)
+  return { enabled: !!settings.enabled && rows[0].models > 0, maxValue: num(rows[0].max_value) ?? 0 }
 }
 
 function parseModelInput(input, base = {}) {
@@ -170,15 +178,19 @@ function parseModelInput(input, base = {}) {
   if (!strs(variants)) throw new SellError('VALIDATION', 'Variants must be a non-empty list of unique names', 422)
   if (!strs(colors)) throw new SellError('VALIDATION', 'Colors must be a non-empty list of unique names', 422)
   if (!Number.isFinite(basePrice) || basePrice <= 0) throw new SellError('VALIDATION', 'Base price must be greater than zero', 422)
-  return { name, category, variants, colors, basePrice }
+  const opt = (v, b) => { const x = v === undefined ? b : v; return x == null || x === '' ? null : String(x).trim().slice(0, 500) }
+  return {
+    name, category, variants, colors, basePrice,
+    brand: opt(input.brand, base.brand), brandLogoUrl: opt(input.brandLogoUrl, base.brand_logo_url), imageUrl: opt(input.imageUrl, base.image_url),
+  }
 }
 
 export async function createModel(input) {
   const m = parseModelInput(input)
   try {
     const { rows } = await query(
-      `INSERT INTO sell_device_models (name, category, variants, colors, base_price) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [m.name, m.category, JSON.stringify(m.variants), JSON.stringify(m.colors), m.basePrice]
+      `INSERT INTO sell_device_models (name, category, variants, colors, base_price, brand, brand_logo_url, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [m.name, m.category, JSON.stringify(m.variants), JSON.stringify(m.colors), m.basePrice, m.brand, m.brandLogoUrl, m.imageUrl]
     )
     return serializeModel(rows[0])
   } catch (err) {
@@ -194,8 +206,9 @@ export async function updateModel(id, input) {
   try {
     const { rows } = await query(
       `UPDATE sell_device_models SET name=$2, category=$3, variants=$4, colors=$5, base_price=$6,
+              brand=$8, brand_logo_url=$9, image_url=$10,
               is_active = COALESCE($7, is_active), updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [id, m.name, m.category, JSON.stringify(m.variants), JSON.stringify(m.colors), m.basePrice, typeof input.isActive === 'boolean' ? input.isActive : null]
+      [id, m.name, m.category, JSON.stringify(m.variants), JSON.stringify(m.colors), m.basePrice, typeof input.isActive === 'boolean' ? input.isActive : null, m.brand, m.brandLogoUrl, m.imageUrl]
     )
     return serializeModel(rows[0])
   } catch (err) {

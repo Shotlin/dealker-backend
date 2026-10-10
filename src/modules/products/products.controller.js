@@ -1,6 +1,7 @@
 import { success, error } from "../../utils/apiResponse.js";
 import { isSingleStoreMode, getPlatformShopIds } from "../allocation/single-store.js";
 import { query } from "../../config/database.js";
+import { withCardFields } from "../../utils/product-card-fields.js";
 
 /**
  * Build a customer scoping context from the authenticated request.
@@ -158,7 +159,9 @@ export class ProductsController {
       ]).catch(() => {});
     });
 
-    return reply.code(200).send(success(product, "Product fetched"));
+    // Same seller field the product cards carry, so the detail page can name the seller.
+    const [withSeller] = await withCardFields([product]);
+    return reply.code(200).send(success({ ...withSeller, sold_by: withSeller.sold_by ?? null }, "Product fetched"));
   }
 
   /** GET /:id/related — Related products */
