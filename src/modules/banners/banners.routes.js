@@ -1,4 +1,5 @@
 import { AdminBannersService } from "../admin/banners/banners.service.js";
+import { isSingleStoreMode, getPlatformShopIds } from "../allocation/single-store.js";
 import { AllocationRepository } from "../allocation/allocation.repository.js";
 import { AllocationService } from "../allocation/allocation.service.js";
 import { success } from "../../utils/apiResponse.js";
@@ -13,6 +14,7 @@ async function resolveStorefrontShopId(request, fastify) {
     return allocation?.shops?.find((shop) => shop.is_primary)?.shop_id || null;
   }
 
+  if (isSingleStoreMode()) return (await getPlatformShopIds())[0] || null;
   const token = request.headers?.["x-storefront-token"];
   if (!token || typeof token !== "string") return null;
   try {

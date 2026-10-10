@@ -19,7 +19,6 @@ export default async function storefrontRoutes(fastify) {
       schema: {
         body: {
           type: "object",
-          required: ["lat", "lng"],
           properties: {
             lat: { type: "number", minimum: -90, maximum: 90 },
             lng: { type: "number", minimum: -180, maximum: 180 },
@@ -38,7 +37,8 @@ export default async function storefrontRoutes(fastify) {
       },
     },
     async (request, reply) => {
-      const result = await allocationService.resolveForLocation(request.body);
+      // Single-store mode: location is optional — the official store serves all of India.
+      const result = await allocationService.resolveForLocation(request.body || {});
       if (!result.success) {
         return reply.code(400).send(error(result.message, result.code));
       }

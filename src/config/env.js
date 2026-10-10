@@ -83,6 +83,9 @@ const envSchema = z.object({
   CLOUDINARY_UPLOAD_PRESET: z.string().optional(),
   CLOUDINARY_FOLDER: z.string().default('meet-commerce'),
 
+  // One official store serves all of India (shop allocation by location is bypassed)
+  SINGLE_STORE_MODE: booleanFromEnv.default(true),
+
   // Rate Limiting
   RATE_LIMIT_ENABLED: booleanFromEnv.default(true),
   RATE_LIMIT_MAX: z.coerce.number().default(100),

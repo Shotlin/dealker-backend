@@ -1,4 +1,5 @@
 import { logger } from '../../config/logger.js'
+import { isSingleStoreMode } from '../allocation/single-store.js'
 import { query } from '../../config/database.js'
 import { env } from '../../config/env.js'
 import { AllocationService } from '../allocation/allocation.service.js'
@@ -44,7 +45,9 @@ async function getServiceablePincodes() {
          FROM shops
         WHERE is_active = true
           AND deleted_at IS NULL
-          AND array_length(serviceable_pincodes, 1) > 0`
+          AND (is_platform = true OR NOT $1::boolean)
+          AND array_length(serviceable_pincodes, 1) > 0`,
+      [isSingleStoreMode()]
     )
 
     const pincodes = new Set(

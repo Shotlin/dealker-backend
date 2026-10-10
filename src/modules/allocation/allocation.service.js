@@ -2,6 +2,7 @@ import { cacheGet, cacheSet, cacheDel } from "../../utils/cache.js";
 import { logger } from "../../config/logger.js";
 import { allocationQueue } from "../../config/bullmq.js";
 import { cleanPincode } from "../../utils/pincode.js";
+import { isSingleStoreMode } from "./single-store.js";
 
 /**
  * Allocation service — pure business logic for user-shop allocation.
@@ -70,7 +71,18 @@ export class AllocationService {
     const cached = await cacheGet(cacheKey);
     if (cached) return cached;
 
-    const rows = await this.repo.findByUserId(userId);
+    let rows = await this.repo.findByUserId(userId);
+    // Single-store mode: every customer is served by the platform shop, even
+    // before they add an address — create their allocation on first read.
+    if (isSingleStoreMode() && rows.length === 0) {
+      const [platform] = await this.repo.findShopsByRadius(null, null);
+      if (platform) {
+        await this.repo.replaceForUser(userId, [
+          { shop_id: platform.id, distance_km: null, matched_pincode: null, is_primary: true },
+        ]);
+        rows = await this.repo.findByUserId(userId);
+      }
+    }
     const result = {
       shops: rows.map((r) => ({
         id: r.id,
@@ -140,7 +152,9 @@ export class AllocationService {
     // on shops. A missing PIN is not an error: matching falls back to
     // coordinates only, exactly as it does when the client sends no PIN.
     const pincode = cleanPincode(address?.pincode);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    // Single-store mode needs no location at all: coordinates only refine the
+    // (informational) distance.
+    if (!isSingleStoreMode() && (!Number.isFinite(lat) || !Number.isFinite(lng))) {
       return {
         success: false,
         code: "INVALID_LOCATION",

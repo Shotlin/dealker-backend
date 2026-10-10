@@ -1,4 +1,5 @@
 import { query, getClient } from "../../config/database.js";
+import { isSingleStoreMode } from "./single-store.js";
 
 /**
  * Allocation repository — all SQL queries for user_shop_allocations
@@ -20,6 +21,34 @@ import { query, getClient } from "../../config/database.js";
 const EARTH_RADIUS_KM = 6371;
 
 export class AllocationRepository {
+  /**
+   * Single-store candidates: the active platform shop, if its (optional)
+   * serviceable_pincodes list is empty or contains `pincode`. Distance is
+   * informational only (NULL without coordinates).
+   */
+  async _platformCandidates(coords = {}, pincode = null) {
+    const hasCoords = Number.isFinite(coords.lat) && Number.isFinite(coords.lng);
+    const { rows } = await query(
+      `SELECT s.id, s.created_at,
+              ${hasCoords ? `(${EARTH_RADIUS_KM} * acos(
+                LEAST(1.0, GREATEST(-1.0,
+                  cos(radians($2::float8)) * cos(radians(s.lat::float8))
+                    * cos(radians(s.lng::float8) - radians($3::float8))
+                    + sin(radians($2::float8)) * sin(radians(s.lat::float8))
+                ))
+              ))::numeric(7,2)` : "NULL::numeric(7,2)"} AS distance_km,
+              s.delivery_radius_km
+         FROM shops s
+        WHERE s.is_platform = true AND s.is_active = true AND s.deleted_at IS NULL
+          AND (COALESCE(cardinality(s.serviceable_pincodes), 0) = 0
+               OR ($1::text IS NOT NULL AND $1 = ANY(s.serviceable_pincodes)))
+        ORDER BY s.created_at ASC
+        LIMIT 1`,
+      hasCoords ? [pincode || null, coords.lat, coords.lng] : [pincode || null],
+    );
+    return rows;
+  }
+
   async findByShopIds(shopIds) {
     if (!Array.isArray(shopIds) || shopIds.length === 0) return [];
     const { rows } = await query(
@@ -118,6 +147,12 @@ export class AllocationRepository {
     const hasCoords =
       Number.isFinite(coords.lat) && Number.isFinite(coords.lng);
 
+    // Single-store mode: only the platform shop, for every pincode unless it
+    // lists specific serviceable pincodes.
+    if (isSingleStoreMode()) {
+      return this._platformCandidates(coords, pincode);
+    }
+
     if (hasCoords) {
       const { rows } = await query(
         `SELECT s.id, s.created_at,
@@ -171,6 +206,10 @@ export class AllocationRepository {
    * }>>}
    */
   async findShopsByRadius(lat, lng) {
+    // Single-store mode: no radius — the platform shop serves all of India.
+    if (isSingleStoreMode()) {
+      return this._platformCandidates({ lat, lng }, null);
+    }
     const { rows } = await query(
       `SELECT id, created_at, distance_km, delivery_radius_km
          FROM (
@@ -215,6 +254,19 @@ export class AllocationRepository {
    */
   async isServiceable({ pincode, lat, lng, shopId = null } = {}) {
     const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+    if (isSingleStoreMode()) {
+      const { rows } = await query(
+        `SELECT EXISTS (
+           SELECT 1 FROM shops s
+            WHERE s.is_platform = true AND s.is_active = true AND s.deleted_at IS NULL
+              AND ($1::uuid IS NULL OR s.id = $1)
+              AND (COALESCE(cardinality(s.serviceable_pincodes), 0) = 0
+                   OR ($2::text IS NOT NULL AND $2 = ANY(s.serviceable_pincodes)))
+         ) AS serviceable`,
+        [shopId || null, pincode || null],
+      );
+      return rows[0]?.serviceable === true;
+    }
     const { rows } = await query(
       `SELECT EXISTS (
          SELECT 1 FROM shops s

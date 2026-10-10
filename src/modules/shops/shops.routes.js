@@ -1,6 +1,7 @@
 import { ShopsController } from './shops.controller.js'
 import { ShopsService } from './shops.service.js'
 import { ShopsRepository } from './shops.repository.js'
+import { query } from '../../config/database.js'
 
 /**
  * Shops routes plugin
@@ -51,6 +52,27 @@ export default async function shopRoutes(fastify) {
     },
     preHandler: adminPreHandlers,
   }, controller.list.bind(controller))
+
+  // GET /platform — the official store (single-store mode: the dashboard works inside it)
+  fastify.get('/platform', {
+    schema: {
+      tags: ['Shops'],
+      summary: 'Get the platform (official) shop [Super Admin]',
+      security: [{ bearerAuth: [] }],
+    },
+    preHandler: adminPreHandlers,
+  }, async (request, reply) => {
+    const { rows } = await query(
+      `SELECT id, name, branch_code, city, is_active FROM shops
+        WHERE is_platform = true AND deleted_at IS NULL
+        ORDER BY is_active DESC, created_at ASC LIMIT 1`
+    )
+    if (!rows[0]) {
+      reply.code(404)
+      return { success: false, message: 'No platform shop configured', code: 'NO_PLATFORM_SHOP' }
+    }
+    return { success: true, message: 'Platform shop', data: rows[0] }
+  })
 
   // GET /:id — Get single shop
   fastify.get('/:id', {

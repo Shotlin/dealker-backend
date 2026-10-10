@@ -1,4 +1,5 @@
 import { success, error } from "../../utils/apiResponse.js";
+import { isSingleStoreMode, getPlatformShopIds } from "../allocation/single-store.js";
 import { query } from "../../config/database.js";
 
 /**
@@ -23,6 +24,8 @@ export async function resolveCustomerContext(request) {
   const user = request?.user;
   if (!user || !user.id) {
     const token = request.headers?.["x-storefront-token"];
+    // Single-store mode: a guest needs no location — they see the official store.
+    if (isSingleStoreMode()) return { shopIds: await getPlatformShopIds() };
     if (!token || typeof token !== "string") return { shopIds: [] };
     try {
       const payload = await request.server.jwt.verify(token);

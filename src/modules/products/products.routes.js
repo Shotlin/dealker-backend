@@ -1,4 +1,5 @@
 import { ProductsController } from "./products.controller.js";
+import { isSingleStoreMode, getPlatformShopIds } from "../allocation/single-store.js";
 import { ProductsService } from "./products.service.js";
 import { ProductsRepository } from "./products.repository.js";
 import { importProductsFromCSV } from "../../utils/csvImporter.js";
@@ -60,6 +61,7 @@ export default async function productRoutes(fastify) {
     const user = request?.user;
     if (!user || !user.id) {
       const token = request.headers?.["x-storefront-token"];
+      if (isSingleStoreMode()) return { shopIds: await getPlatformShopIds() };
       if (!token || typeof token !== "string") return { shopIds: [] };
       try {
         const payload = await fastify.jwt.verify(token);
