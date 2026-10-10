@@ -3,6 +3,7 @@ import https from 'node:https'
 
 import { success, error } from '../../utils/apiResponse.js'
 import { env } from '../../config/env.js'
+import { resolveUploadFolder } from './upload-folders.js'
 
 /**
  * Uploads controller
@@ -28,7 +29,9 @@ export class UploadsController {
     }
 
     try {
-      const result = await this.service.uploadImage(file.file)
+      const result = await this.service.uploadImage(file.file, {
+        folder: resolveUploadFolder(request.query?.kind, 'misc'),
+      })
       return reply.code(200).send(success(result, 'Image uploaded'))
     } catch (err) {
       request.log.error({ err }, 'Image upload failed in controller')
@@ -87,7 +90,7 @@ export class UploadsController {
           return reply.code(400).send(error(`Invalid file type: ${part.filename}`, 'INVALID_FILE_TYPE'))
         }
         const result = await this.service.uploadImage(part.file, {
-          folder: `${env.CLOUDINARY_FOLDER}/products`,
+          folder: resolveUploadFolder(request.query?.kind, 'product'),
         })
         results.push(result)
       }
@@ -109,7 +112,7 @@ export class UploadsController {
       return reply.code(400).send(error('No file provided'))
     }
     const buffer = await data.toBuffer()
-    const result = await this.service.uploadFile(buffer, data.filename)
+    const result = await this.service.uploadFile(buffer, data.filename, resolveUploadFolder(request.query?.kind, 'theme'))
     return reply.code(200).send(success(result, 'File uploaded'))
   }
 

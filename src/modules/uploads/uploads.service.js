@@ -49,7 +49,7 @@ export class UploadsService {
     }
   }
 
-  async uploadFile(fileBuffer, filename, folder = 'bakaloo/theme-assets') {
+  async uploadFile(fileBuffer, filename, folder = `${env.CLOUDINARY_FOLDER}/themes`) {
     const safeFilename = `${filename || 'asset'}`
       .trim()
       .replace(/[^\w.-]+/g, '_')
