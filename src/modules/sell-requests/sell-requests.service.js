@@ -20,6 +20,7 @@ import { notifySellEvent } from './sell-requests.notify.js'
 import { DEFAULT_RULES, ValidationError, isValidImei, parseQa, valuate, variantBase } from './valuation.js'
 import { claimMedia, listMedia } from './evidence.service.js'
 import { assertQcAllowsApproval, assertQcAllowsCompletion, ensureQc, getQc } from './request-qc.service.js'
+import { assertNotBlocked, countNearbyVendors, estimateRange, findPassingCheck, vendorDistanceKm } from './sell-journey.service.js'
 
 export class SellError extends Error {
   constructor(code, message, statusCode = 400, details = {}) {
@@ -98,6 +99,15 @@ export async function getSettingsForAdmin() {
     maxImageMb: s.max_image_mb,
     maxVideoMb: s.max_video_mb,
     qcRequiredForApproval: s.qc_required_for_approval,
+    offerWindowMinutes: s.offer_window_minutes,
+    maxOfferRefreshes: s.max_offer_refreshes,
+    estimateSpreadPct: num(s.estimate_spread_pct),
+    requireVendorFunding: s.require_vendor_funding,
+    pickupEnabled: s.pickup_enabled,
+    dropoffEnabled: s.dropoff_enabled,
+    payoutWalletEnabled: s.payout_wallet_enabled,
+    payoutUpiEnabled: s.payout_upi_enabled,
+    payoutBankEnabled: s.payout_bank_enabled,
   }
 }
 
@@ -143,6 +153,16 @@ export async function updateSettings(actor, input) {
       input.qcRequiredForApproval ?? cur.qc_required_for_approval,
     ]
   )
+  const bool = (k) => { if (input[k] !== undefined && typeof input[k] !== 'boolean') throw new SellError('VALIDATION', `${k} must be true or false`, 422); return input[k] }
+  const journeyCols = {
+    offer_window_minutes: input.offerWindowMinutes !== undefined ? int(input.offerWindowMinutes, 'offerWindowMinutes', 5, 1440, 0) : undefined,
+    max_offer_refreshes: input.maxOfferRefreshes !== undefined ? int(input.maxOfferRefreshes, 'maxOfferRefreshes', 0, 20, 0) : undefined,
+    estimate_spread_pct: input.estimateSpreadPct !== undefined ? pct(input.estimateSpreadPct, 'estimateSpreadPct') : undefined,
+    require_vendor_funding: bool('requireVendorFunding'), pickup_enabled: bool('pickupEnabled'), dropoff_enabled: bool('dropoffEnabled'),
+    payout_wallet_enabled: bool('payoutWalletEnabled'), payout_upi_enabled: bool('payoutUpiEnabled'), payout_bank_enabled: bool('payoutBankEnabled'),
+  }
+  const jk = Object.keys(journeyCols).filter((k) => journeyCols[k] !== undefined)
+  if (jk.length) await query(`UPDATE sell_settings SET ${jk.map((k, i) => `${k} = $${i + 1}`).join(', ')} WHERE id = TRUE`, jk.map((k) => journeyCols[k]))
   return getSettingsForAdmin()
 }
 
@@ -274,6 +294,7 @@ function serialize(r, { actor = { kind: 'ADMIN' }, offers = [], events = [], ass
     code: r.code,
     kind: r.kind,
     status: r.status,
+    stage: r.stage,
     type: r.type,
     createdAt: r.created_at.toISOString(),
     customer: {
@@ -366,6 +387,7 @@ export async function getManage(actor, id) {
   out.media = media
   // Vendors see the evidence but not the platform's internal QC notes.
   out.qc = actor.kind === 'VENDOR' ? { status: qc.status } : qc
+  if (r.kind === 'SELL') out.journey = await (await import('./sell-journey.service.js')).getManageJourney(actor, id)
   return out
 }
 
@@ -477,6 +499,7 @@ export async function createRequest(actor, input) {
       : 'Sell requests are created from the Sell section — use /sell-requests', 422)
   }
   if (!isValidImei(input.imei)) throw new SellError('INVALID_IMEI', 'IMEI must be 15 digits and pass the checksum', 422)
+  await assertNotBlocked(input.imei)
 
   let customer
   if (actor.kind === 'CUSTOMER') {
@@ -531,6 +554,16 @@ export async function createRequest(actor, input) {
         await addEvent(client, rows[0].id, 'ORDER_LINKED', `Order ${o.order_number} linked`, actor, { orderId: o.id })
       }
       created = rows[0].id
+      // Sell journey: estimate band, offer window, IMEI check and where the customer is (for vendor distance).
+      const range = estimateRange(q.value, q.settings.estimate_spread_pct)
+      const checked = actor.kind === 'CUSTOMER' ? await findPassingCheck(client, customer.userId, input.imei, input.imeiCheckId) : null
+      const loc = input.location || {}
+      const lat = loc.lat != null && Math.abs(Number(loc.lat)) <= 90 ? Number(loc.lat) : null
+      const lng = loc.lng != null && Math.abs(Number(loc.lng)) <= 180 ? Number(loc.lng) : null
+      await client.query(
+        `UPDATE sell_requests SET estimate_min = $2, estimate_max = $3, offers_close_at = NOW() + ($4 || ' minutes')::interval,
+                imei_verified_at = $5, pickup_lat = $6, pickup_lng = $7, pickup_pincode = $8 WHERE id = $1`,
+        [rows[0].id, range.min, range.max, String(q.settings.offer_window_minutes), checked ? new Date() : null, lat, lng, /^\d{6}$/.test(String(loc.pincode ?? '')) ? String(loc.pincode) : null])
       await ensureQc(client, rows[0].id, actor)
       if (Array.isArray(input.mediaIds) && input.mediaIds.length) await claimMedia(client, rows[0], actor, input.mediaIds, 'CUSTOMER_SUBMISSION')
       const full = { ...rows[0], total_requests: 1 }
@@ -572,6 +605,7 @@ export async function getMine(userId, id, kind) {
   out.qc = await getQc(id, { forCustomer: true })
   out.bestOffer = num(best[0].best)
   delete out.adminNote
+  if (kind === 'SELL') out.journey = await (await import('./sell-journey.service.js')).getJourney(userId, id)
   return out
 }
 
@@ -613,7 +647,7 @@ export const reject = (actor, id, reason) => tx(async (client) => {
   await client.query(`UPDATE sell_request_offers SET status='DECLINED', updated_at=NOW() WHERE request_id=$1 AND status='OPEN'`, [id])
   await addEvent(client, id, 'REJECTED', 'Rejected', actor, { reason: note })
   return note
-}).then((note) => { notifySellEvent('REJECTED', id, { reason: note }); return getManage(actor, id) })
+}).then(async (note) => { await (await import('./sell-journey.service.js')).onClosed(id).catch(() => {}); notifySellEvent('REJECTED', id, { reason: note }); return getManage(actor, id) })
 
 export const requestInfo = (actor, id, message) => tx(async (client) => {
   const note = noteOf(message, { required: true, name: 'A message' })
@@ -681,7 +715,7 @@ export const cancel = (actor, id, reason) => tx(async (client) => {
   await client.query(`UPDATE sell_requests SET status='CANCELLED', admin_note=COALESCE($2, admin_note), updated_at=NOW() WHERE id=$1`, [id, noteOf(reason) || null])
   await client.query(`UPDATE sell_request_offers SET status='DECLINED', updated_at=NOW() WHERE request_id=$1 AND status IN ('OPEN','ACCEPTED')`, [id])
   await addEvent(client, id, 'CANCELLED', actor.kind === 'CUSTOMER' ? 'Cancelled by customer' : 'Cancelled', actor)
-}).then(() => { notifySellEvent('CANCELLED', id, { skipCustomer: actor.kind === 'CUSTOMER' }) }).then(() => (actor.kind === 'CUSTOMER' ? getMine(actor.userId, id, scopeKindOf(actor)) : getManage(actor, id)))
+}).then(async () => { (await import('./sell-journey.service.js')).onClosed(id).catch(() => {}); notifySellEvent('CANCELLED', id, { skipCustomer: actor.kind === 'CUSTOMER' }) }).then(() => (actor.kind === 'CUSTOMER' ? getMine(actor.userId, id, scopeKindOf(actor)) : getManage(actor, id)))
 
 export const assignVendor = (actor, id, vendorId) => tx(async (client) => {
   const r = await lock(client, id, actor)
@@ -713,8 +747,10 @@ export const placeOffer = (actor, id, input) => tx(async (client) => {
   const r = await lock(client, id, actor)
   need(r, OPEN, 'This request is no longer open for offers')
   if (r.assigned_vendor_id) throw new SellError('ALREADY_ASSIGNED', 'A vendor has already been assigned', 409)
+  if (r.offers_close_at && new Date(r.offers_close_at).getTime() < Date.now()) throw new SellError('OFFERS_CLOSED', 'The offer window for this request has closed', 409)
   if (amount > Number(r.base_price) * 1.25) throw new SellError('VALIDATION', 'Offer is unrealistically high for this device', 422)
-  const distance = input.distanceKm == null ? null : Math.max(0, Math.min(999, Number(input.distanceKm) || 0))
+  const computed = await vendorDistanceKm(actor.vendorId, r.pickup_lat != null ? Number(r.pickup_lat) : null, r.pickup_lng != null ? Number(r.pickup_lng) : null)
+  const distance = computed ?? (input.distanceKm == null ? null : Math.max(0, Math.min(999, Number(input.distanceKm) || 0)))
   const { rows: ex } = await client.query('SELECT id, status FROM sell_request_offers WHERE request_id=$1 AND vendor_id=$2 FOR UPDATE', [id, actor.vendorId])
   if (ex[0]) {
     await client.query(`UPDATE sell_request_offers SET amount=$2, note=$3, distance_km=COALESCE($4, distance_km), status='OPEN', updated_at=NOW() WHERE id=$1`, [ex[0].id, amount, noteOf(input.note) || null, distance])

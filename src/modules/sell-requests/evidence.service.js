@@ -16,7 +16,8 @@ import { EvidenceError, removeEvidence, saveEvidence, signEvidence } from './evi
 
 export const STAGES = ['CUSTOMER_SUBMISSION', 'PICKUP_INSPECTION', 'TECHNICIAN_QC', 'FINAL_QC', 'DISPUTE']
 const CUSTOMER_STAGES = ['CUSTOMER_SUBMISSION', 'DISPUTE']
-const VENDOR_STAGES = ['PICKUP_INSPECTION']
+// The buyer (vendor) inspects the phone itself, so it records pickup and inspection evidence.
+const VENDOR_STAGES = ['PICKUP_INSPECTION', 'TECHNICIAN_QC', 'FINAL_QC']
 const TERMINAL = ['REJECTED', 'CANCELLED', 'COMPLETED']
 const MAX_PENDING_PER_USER = 30
 const MAX_ATTACH_BATCH = 30
@@ -152,7 +153,7 @@ export async function claimMedia(client, request, actor, mediaIds, stage = 'CUST
     if (!CUSTOMER_STAGES.includes(stage)) throw new SellError('FORBIDDEN', 'Customers can only add submission or dispute evidence', 403)
   } else if (actor.kind === 'VENDOR') {
     if (!actor.vendorId || request.assigned_vendor_id !== actor.vendorId) throw new SellError('NOT_FOUND', 'Request not found', 404)
-    if (!VENDOR_STAGES.includes(stage)) throw new SellError('FORBIDDEN', 'Vendors can only add pickup inspection evidence', 403)
+    if (!VENDOR_STAGES.includes(stage)) throw new SellError('FORBIDDEN', 'Vendors can only add pickup and inspection evidence', 403)
   }
   if (TERMINAL.includes(request.status) && stage !== 'DISPUTE' && actor.kind !== 'ADMIN') {
     throw new SellError('INVALID_STATE', 'Evidence can no longer be added to a closed request', 409)

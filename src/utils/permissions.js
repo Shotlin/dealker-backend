@@ -207,6 +207,7 @@ const CANONICAL_PERMISSION_LIST = Object.freeze([
   'sell_requests.manage',
   'sell_requests.settings',
   'sell_requests.qc',
+  'sell_requests.finance',
   // ── Exchange requests (trade-in with a new purchase) ───────────────────
   'exchange_requests.view',
   'exchange_requests.manage',

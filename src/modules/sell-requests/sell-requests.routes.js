@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import * as svc from './sell-requests.service.js'
 import * as evidence from './evidence.service.js'
 import * as qc from './request-qc.service.js'
+import * as journey from './sell-journey.service.js'
 import { evidencePath, verifyEvidence } from './evidence-storage.js'
 
 const idParams = {
@@ -66,6 +67,32 @@ function customerRoutes(scopeKind) {
     fastify.get('/summary', wrap(async () => ok(await svc.publicSummary())))
 
     fastify.get('/catalog', { preHandler: auth }, wrap(async () => ok(await svc.listModels())))
+
+    if (scopeKind === 'SELL') {
+      // ── sell-your-phone journey ──
+      /** Windows, switches and limits the app needs to render the journey. */
+      fastify.get('/journey-config', { preHandler: auth }, wrap(async () => {
+        const s = await svc.getSettings()
+        return ok({ enabled: s.enabled, offerWindowMinutes: s.offer_window_minutes, maxOfferRefreshes: s.max_offer_refreshes, pickupEnabled: s.pickup_enabled,
+          dropoffEnabled: s.dropoff_enabled, pickupWindows: journey.PICKUP_WINDOWS, maxImages: s.max_images, maxVideos: s.max_videos })
+      }))
+      fastify.post('/verify-imei', { preHandler: auth }, wrap(async (request) => ok(await journey.verifyImei(request.user.id, request.body || {}))))
+      /** Price band + how many verified buyers could bid. Same engine as /quote; the final price always comes from a buyer's offer. */
+      fastify.post('/estimate', { preHandler: auth }, wrap(async (request) => {
+        const q = await svc.quote(request.body || {})
+        const loc = request.body?.location || {}
+        const range = journey.estimateRange(q.value, q.settings.estimate_spread_pct)
+        return ok({ quote: q.value, condition: q.condition, base: q.base, deductions: q.deductions, estimateMin: range.min, estimateMax: range.max,
+          vendorsNearby: await journey.countNearbyVendors({ city: request.body?.customer?.city || null, pincode: loc.pincode || null }), offerWindowMinutes: q.settings.offer_window_minutes })
+      }))
+      fastify.get('/:id/offers', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await journey.listOffersForCustomer(request.user.id, request.params.id))))
+      fastify.post('/:id/offers/refresh', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await journey.refreshOffers(request.user.id, request.params.id))))
+      fastify.post('/:id/offers/:offerId/accept', { preHandler: auth, schema: { params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, offerId: { type: 'string', format: 'uuid' } }, required: ['id', 'offerId'] } } },
+        wrap(async (request) => ok(await journey.acceptOffer(request.user.id, request.params.id, request.params.offerId))))
+      fastify.post('/:id/fulfilment', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await journey.bookFulfilment(request.user.id, request.params.id, request.body || {}))))
+      fastify.get('/:id/journey', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await journey.getJourney(request.user.id, request.params.id))))
+      fastify.post('/:id/payout', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await journey.choosePayout(request.user.id, request.params.id, request.body || {}))))
+    }
 
     fastify.post('/quote', { preHandler: auth }, wrap(async (request) => {
       const q = await svc.quote(request.body || {})
@@ -198,6 +225,7 @@ function manageRoutes(scopeKind) {
       if (!request.vendorId) return reply.code(403).send({ success: false, code: 'FORBIDDEN', message: 'Vendor access required' })
     }
     const qcGuard = async (request, reply) => {
+      if (scopeKind === 'SELL' && !isPlatformUser(request.user) && request.vendorId) return   // the assigned buyer inspects (checked in the service)
       if (!isPlatformUser(request.user) || !(request.permissions?.includes(QC) || request.permissions?.includes(MANAGE))) {
         return reply.code(403).send({ success: false, code: 'PERMISSION_DENIED', message: `Forbidden — requires '${QC}' permission` })
       }
@@ -232,6 +260,31 @@ function manageRoutes(scopeKind) {
     qcAction('inspection', (a, id, b) => qc.submitInspection(a, id, b))
     qcAction('decision', (a, id, b) => qc.decide(a, id, { result: b.result, note: b.note, finalValuation: b.finalValuation }))
     qcAction('reopen', (a, id, b) => qc.reopen(a, id, b.reason ?? b.note))
+
+    if (scopeKind === 'SELL') {
+      const FIN = 'sell_requests.finance'
+      const act = (name, g, fn) => fastify.post(`/:id/${name}`, { preHandler: pre(g), schema: params }, wrap(async (request) => ok(await fn(actorOf(request), request.params.id, request.body || {}))))
+      const vendorOrStaff = guard(MANAGE)
+      // blocklist (stolen / disputed devices can never be listed)
+      fastify.get('/imei-blocklist', { preHandler: pre(platformOnly('sell_requests.settings')) }, wrap(async (request) => ok(await journey.listBlocklist(request.query || {}))))
+      fastify.post('/imei-blocklist', { preHandler: pre(platformOnly('sell_requests.settings')) }, wrap(async (request, reply) => reply.code(201).send(ok(await journey.addToBlocklist(actorOf(request), request.body || {})))))
+      fastify.delete('/imei-blocklist/:imei', { preHandler: pre(platformOnly('sell_requests.settings')) }, wrap(async (request) => ok(await journey.removeFromBlocklist(request.params.imei))))
+      fastify.get('/finance/queue', { preHandler: pre(platformOnly(FIN)) }, wrap(async () => ok(await journey.financeQueue())))
+      // buyer (vendor) steps
+      act('vendor-payment', vendorOrStaff, (a, id, b) => (a.kind === 'VENDOR' ? journey.submitVendorFunding(a, id, b) : journey.confirmVendorFunding(a, id, b)))
+      act('vendor-payment/confirm', platformOnly(FIN), (a, id, b) => journey.confirmVendorFunding(a, id, b))
+      act('pickup', vendorOrStaff, (a, id, b) => journey.savePickup(a, id, b))
+      act('pickup/status', vendorOrStaff, (a, id, b) => journey.setPickupStatus(a, id, b.status, { note: b.note, providerStatus: b.providerStatus }))
+      act('pickup/sync', vendorOrStaff, async (a, id) => journey.syncPickup(a, id, await (async () => { const { ShippingService } = await import('../shipping/shipping.service.js'); return new ShippingService() })()))
+      act('received', vendorOrStaff, (a, id) => journey.markReceived(a, id))
+      act('returned', vendorOrStaff, (a, id) => journey.markReturned(a, id))
+      // finance
+      act('payout/paid', platformOnly(FIN), (a, id, b) => journey.markPayoutPaid(a, id, b))
+      act('payout/failed', platformOnly(FIN), (a, id, b) => journey.failPayout(a, id, b.reason))
+      act('payout/release', platformOnly(FIN), async (a, id) => { await journey.releasePayout(a, id); return journey.getManageJourney(a, id) })
+      act('refund/paid', platformOnly(FIN), (a, id, b) => journey.markVendorRefunded(a, id, b))
+      fastify.get('/:id/payout/details', { preHandler: pre(platformOnly(FIN)), schema: params }, wrap(async (request) => ok(await journey.revealPayoutDetails(actorOf(request), request.params.id))))
+    }
 
     fastify.post('/:id/offers', { preHandler: pre(vendorOnly), schema: params }, wrap(async (request) =>
       ok(await svc.placeOffer(actorOf(request), request.params.id, request.body || {}))))

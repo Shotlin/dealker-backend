@@ -266,8 +266,8 @@ d('sell request evidence + QC', () => {
     for (const [method, url] of [['POST', `/api/v1/manage/sell-requests/${req.id}/qc/start`], ['POST', `/api/v1/manage/sell-requests/${req.id}/qc/decision`], ['GET', `/api/v1/manage/sell-requests/${req.id}/qc`]]) {
       expect((await app.inject({ method, url, headers: auth(T.cust.token), payload: {} })).statusCode, `${method} ${url}`).toBe(403)
     }
-    // vendors can never run QC decisions
-    expect((await app.inject({ method: 'POST', url: `/api/v1/manage/sell-requests/${req.id}/qc/decision`, headers: auth(T.vendA.token), payload: { result: 'PASSED' } })).statusCode).toBe(403)
+    // a vendor can only inspect a phone it was assigned (sell-your-phone: the buyer inspects) — others see nothing
+    expect((await app.inject({ method: 'POST', url: `/api/v1/manage/sell-requests/${req.id}/qc/decision`, headers: auth(T.vendA.token), payload: { result: 'PASSED' } })).statusCode).toBe(404)
 
     // vendor A is assigned; vendor B is not
     await q(`UPDATE sell_requests SET assigned_vendor_id = $2, status = 'IN_PROGRESS' WHERE id = $1`, [req.id, T.vendA.vendorId])
@@ -275,7 +275,7 @@ d('sell request evidence + QC', () => {
     const ok = await app.inject({ method: 'POST', url: `/api/v1/manage/sell-requests/${req.id}/media`, headers: auth(T.vendA.token), payload: { mediaIds: [pic[0].id], stage: 'PICKUP_INSPECTION' } })
     expect(ok.statusCode, ok.body).toBe(200)
     const wrongStage = await uploadOk(T.vendA, [{ name: 'x.jpg', type: 'image/jpeg', data: jpeg() }])
-    expect((await app.inject({ method: 'POST', url: `/api/v1/manage/sell-requests/${req.id}/media`, headers: auth(T.vendA.token), payload: { mediaIds: [wrongStage[0].id], stage: 'FINAL_QC' } })).statusCode).toBe(403)
+    expect((await app.inject({ method: 'POST', url: `/api/v1/manage/sell-requests/${req.id}/media`, headers: auth(T.vendA.token), payload: { mediaIds: [wrongStage[0].id], stage: 'CUSTOMER_SUBMISSION' } })).statusCode).toBe(403)
     const bPic = await uploadOk(T.vendB, [{ name: 'b.jpg', type: 'image/jpeg', data: jpeg() }])
     expect((await app.inject({ method: 'POST', url: `/api/v1/manage/sell-requests/${req.id}/media`, headers: auth(T.vendB.token), payload: { mediaIds: [bPic[0].id], stage: 'PICKUP_INSPECTION' } })).statusCode).toBe(404)
     // vendor B cannot see a request assigned to vendor A, nor mint a link to its files

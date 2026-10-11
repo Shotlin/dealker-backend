@@ -107,6 +107,8 @@ function move(q, to) {
 
 async function loadLocked(client, actor, id) {
   const r = await lock(client, id, actor)
+  // A buyer (vendor) can only inspect a phone it was assigned.
+  if (actor.kind === 'VENDOR' && r.assigned_vendor_id !== actor.vendorId) throw new SellError('NOT_FOUND', 'Sell request not found', 404)
   if (CLOSED.includes(r.status)) throw new SellError('INVALID_STATE', 'This request is closed, so QC can no longer change', 409)
   const q = await ensureQc(client, id, actor)
   return { r, q }
@@ -117,7 +119,9 @@ async function mediaCount(client, id) {
   return rows[0].n
 }
 
-const done = (actor, id) => getQc(id).then((qc) => ({ requestId: id, qc }))
+const journey = () => import('./sell-journey.service.js')
+/** Re-derive the customer-facing stage after every QC step. */
+const done = async (actor, id) => { await (await journey()).afterQc(id).catch(() => {}); return getQc(id).then((qc) => ({ requestId: id, qc })) }
 
 /** Staff picks the request up for inspection (optionally naming an inspector). */
 export const startInspection = (actor, id, { inspectorId } = {}) => tx(async (client) => {
@@ -183,8 +187,10 @@ export const decide = (actor, id, { result, note, finalValuation } = {}) => {
     let valuation = null
     if (result === 'PASSED') {
       if (q.imei_verified === false) throw new SellError('IMEI_MISMATCH', 'A device whose IMEI could not be verified cannot pass QC', 409)
-      valuation = finalValuation == null || finalValuation === '' ? Number(r.quote) : Number(finalValuation)
+      const agreed = r.accepted_offer_id && r.final_price != null ? Number(r.final_price) : null
+      valuation = finalValuation == null || finalValuation === '' ? Number(agreed ?? r.quote) : Number(finalValuation)
       if (!Number.isFinite(valuation) || valuation < 0 || valuation > 10_000_000) throw new SellError('VALIDATION', 'Final valuation is invalid', 422)
+      if (agreed != null && valuation > agreed) throw new SellError('VALIDATION', `The final price cannot be higher than the accepted offer (₹${agreed})`, 422)
       valuation = Math.round(valuation * 100) / 100
     }
     await client.query(
@@ -237,6 +243,7 @@ export async function customerDecision(userId, scopeKind, id, decision) {
     await addEvent(client, id, 'QC_CUSTOMER_DECISION', decision === 'ACCEPT' ? 'Customer accepted the final valuation' : 'Customer declined the final valuation', actor)
   })
   if (decision === 'DECLINE') await cancel(actor, id, 'Customer declined the final valuation')
+  else await (await journey()).afterQc(id).catch(() => {})
   return { requestId: id, qc: await getQc(id, { forCustomer: true }) }
 }
 

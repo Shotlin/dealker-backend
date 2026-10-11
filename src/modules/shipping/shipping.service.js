@@ -349,7 +349,10 @@ export class ShippingService {
       // Not a seller-order shipment — it may be the courier pickup of a customer return.
       const { ReturnJourneyService } = await import('../refund-requests/return-journey.service.js')
       const matched = await new ReturnJourneyService({ shipping: this }).applyWebhook(provider, payload)
-      return { matched, return_pickup: matched }
+      if (matched) return { matched, return_pickup: matched }
+      // …or the courier pickup of a customer's phone being sold to a vendor.
+      const sellMatched = await (await import('../sell-requests/sell-journey.service.js')).applyWebhook(provider, payload, this)
+      return { matched: sellMatched, sell_pickup: sellMatched }
     }
     const adapter = await this.#adapter(provider)
     const mapped = adapter.mapStatus(payload.current_status || payload.status)
