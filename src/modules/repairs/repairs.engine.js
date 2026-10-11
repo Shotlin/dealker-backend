@@ -17,7 +17,7 @@ export const STATUSES = [
 export const TRANSITIONS = Object.freeze({
   REQUESTED: ['ACCEPTED', 'REJECTED', 'CANCELLED'],
   ACCEPTED: ['INSPECTION', 'CANCELLED'],
-  INSPECTION: ['ESTIMATE_SENT', 'FAILED'],
+  INSPECTION: ['ESTIMATE_SENT', 'ESTIMATE_APPROVED', 'FAILED'],   // → ESTIMATE_APPROVED only with the price the customer already chose (marketplace)
   ESTIMATE_SENT: ['ESTIMATE_APPROVED', 'ESTIMATE_REJECTED'],
   ESTIMATE_APPROVED: ['IN_REPAIR', 'ESTIMATE_REJECTED'],
   IN_REPAIR: ['QC_PENDING', 'FAILED'],
@@ -35,6 +35,7 @@ export const TERMINAL = ['REJECTED', 'CANCELLED']
 
 /** Queues shown on the dashboard. */
 export const TABS = Object.freeze({
+  active: ['ACCEPTED', 'INSPECTION', 'ESTIMATE_SENT', 'ESTIMATE_APPROVED', 'IN_REPAIR', 'QC_PENDING', 'REPAIRED', 'READY_FOR_DELIVERY'],
   new: ['REQUESTED'],
   intake: ['ACCEPTED', 'INSPECTION'],
   approval: ['ESTIMATE_SENT'],

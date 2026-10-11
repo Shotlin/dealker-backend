@@ -25,6 +25,7 @@ const COPY = {
   READY_FOR_DELIVERY: (r) => ({ title: 'Ready for delivery', body: `${r.code}: your device is ready${r.service_mode === 'PICKUP' ? ' to be delivered' : ' for pickup'}.` }),
   COMPLETED: (r) => ({ title: 'Repair completed', body: `${r.code} is complete.${r.warranty_until ? ` Warranty valid until ${r.warranty_until.toLocaleDateString('en-IN')}.` : ''}` }),
   FAILED: (r, x) => ({ title: 'We could not repair your device', body: `${r.code}: ${x.reason || 'the device could not be repaired'}. We'll arrange its return.` }),
+  UPDATE: (r) => ({ title: 'Repair update', body: `${r.code}: your repair shop posted an update on your device.` }),
   CANCELLED: (r) => ({ title: 'Repair request cancelled', body: `${r.code} was cancelled.` }),
 }
 

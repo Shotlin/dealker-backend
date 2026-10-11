@@ -4,7 +4,7 @@ import { GSTIN_RE } from './repairs.engine.js'
 import { RepairError, getSettings } from './repairs.service.js'
 
 const num = (v) => (v == null ? null : Number(v))
-const CATS = ['SCREEN', 'BATTERY', 'CHARGING', 'WATER_DAMAGE', 'SOFTWARE', 'CAMERA', 'AUDIO', 'BODY', 'BOARD', 'BIOMETRIC', 'DATA', 'OTHER']
+const CATS = ['SCREEN', 'BATTERY', 'CHARGING', 'WATER_DAMAGE', 'SOFTWARE', 'CAMERA', 'AUDIO', 'BODY', 'BOARD', 'BIOMETRIC', 'DATA', 'TOUCH', 'NETWORK', 'OTHER']
 const DEVICES = ['ANY', 'Smartphone', 'Tablet', 'Laptop']
 
 const SETTING_FIELDS = {
@@ -22,6 +22,9 @@ const SETTING_FIELDS = {
   maxB2bDevices: { col: 'max_b2b_devices', min: 1, max: 1000 },
   maxImages: { col: 'max_images', min: 0, max: 30 }, maxVideos: { col: 'max_videos', min: 0, max: 5 },
   maxImageMb: { col: 'max_image_mb', min: 1, max: 25 }, maxVideoMb: { col: 'max_video_mb', min: 5, max: 500 },
+  marketplaceEnabled: { col: 'marketplace_enabled', bool: true }, autoQuoteEnabled: { col: 'auto_quote_enabled', bool: true },
+  searchRadiusKm: { col: 'search_radius_km', min: 1, max: 500 }, offerWindowHours: { col: 'offer_window_hours', min: 1, max: 336 },
+  maxOffers: { col: 'max_offers', min: 1, max: 50 },
 }
 
 export function serializeSettings(s) {

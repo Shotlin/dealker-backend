@@ -27,14 +27,14 @@ export class RepairError extends Error {
   }
 }
 
-const PROBLEMS = ['SCREEN', 'BATTERY', 'CHARGING', 'WATER_DAMAGE', 'SOFTWARE', 'CAMERA', 'AUDIO', 'BODY', 'BOARD', 'BIOMETRIC', 'DATA', 'OTHER']
-const CATEGORIES = ['Smartphone', 'Tablet', 'Laptop', 'Other']
+export const PROBLEMS = ['SCREEN', 'BATTERY', 'CHARGING', 'WATER_DAMAGE', 'SOFTWARE', 'CAMERA', 'AUDIO', 'BODY', 'BOARD', 'BIOMETRIC', 'DATA', 'TOUCH', 'NETWORK', 'OTHER']
+export const CATEGORIES = ['Smartphone', 'Tablet', 'Laptop', 'Other']
 const WARRANTY = ['IN_WARRANTY', 'OUT_OF_WARRANTY', 'UNKNOWN']
 const METHODS = ['CASH', 'UPI', 'CARD', 'BANK', 'COD', 'WALLET']
 const PAY_KINDS = ['ADVANCE', 'BALANCE', 'DIAGNOSTIC', 'REFUND']
 const PHONE_RE = /^\+?\d[\d ]{9,13}$/
 const ACTIVE_NOT = ['COMPLETED', 'REJECTED', 'CANCELLED']
-const num = (v) => (v == null ? null : Number(v))
+export const num = (v) => (v == null ? null : Number(v))
 /** node-pg returns DATE columns as local-midnight Date objects; format them back as YYYY-MM-DD. */
 export const ymd = (d) => {
   if (d == null) return null
@@ -42,7 +42,7 @@ export const ymd = (d) => {
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
-const text = (v, max) => String(v ?? '').trim().slice(0, max)
+export const text = (v, max) => String(v ?? '').trim().slice(0, max)
 
 export async function tx(fn) {
   const client = await getClient()
@@ -94,14 +94,14 @@ const staffOnly = (actor) => {
   if (actor.kind === 'CUSTOMER') throw new RepairError('FORBIDDEN', 'Only repair staff can do this', 403)
 }
 
-async function patch(client, id, cols) {
+export async function patch(client, id, cols) {
   const keys = Object.keys(cols)
   const sets = keys.map((k, i) => `${k} = $${i + 2}`).join(', ')
   await client.query(`UPDATE repair_requests SET ${sets}${sets ? ',' : ''} updated_at = NOW() WHERE id = $1`, [id, ...keys.map((k) => cols[k])])
 }
 
 /** Move to a new status (transition-checked) and record it. */
-async function moveTo(client, r, to, actor, label, cols = {}, meta = {}) {
+export async function moveTo(client, r, to, actor, label, cols = {}, meta = {}) {
   if (!canMove(r.status, to)) {
     throw new RepairError('INVALID_STATE', `A repair that is ${r.status.toLowerCase().replace(/_/g, ' ')} cannot move to ${to.toLowerCase().replace(/_/g, ' ')}`, 409, { from: r.status, to })
   }
@@ -109,7 +109,7 @@ async function moveTo(client, r, to, actor, label, cols = {}, meta = {}) {
   await addEvent(client, r.id, to, label, actor, { from: r.status, to, meta })
 }
 
-const amountDue = (r) => Math.max(0, money.rupees(money.paise(r.approved_total) - money.paise(r.amount_paid)))
+export const amountDue = (r) => Math.max(0, money.rupees(money.paise(r.approved_total) - money.paise(r.amount_paid)))
 const refundable = (r) => Math.max(0, money.rupees(money.paise(r.amount_paid) - money.paise(r.approved_total)))
 
 // ── create ──────────────────────────────────────────────────────────────
@@ -121,8 +121,10 @@ function cleanItems(raw, max) {
   return raw.map((i, idx) => {
     const brand = text(i.brand, 60), model = text(i.model, 120)
     if (!brand || !model) throw new RepairError('VALIDATION', `Device ${idx + 1}: brand and model are required`, 422)
-    const problemCategory = i.problemCategory
-    if (!PROBLEMS.includes(problemCategory)) throw new RepairError('VALIDATION', `Device ${idx + 1}: choose the problem type`, 422)
+    const rawIssues = Array.isArray(i.problemCategories) && i.problemCategories.length ? i.problemCategories : [i.problemCategory]
+    const problemCategories = [...new Set(rawIssues)]
+    if (!problemCategories.length || problemCategories.length > 8 || problemCategories.some((p) => !PROBLEMS.includes(p))) throw new RepairError('VALIDATION', `Device ${idx + 1}: choose the problem type`, 422)
+    const problemCategory = problemCategories[0]
     const category = i.category ?? 'Smartphone'
     if (!CATEGORIES.includes(category)) throw new RepairError('VALIDATION', `Device ${idx + 1}: unknown device category`, 422)
     const warranty = i.warrantyStatus ?? 'UNKNOWN'
@@ -133,7 +135,7 @@ function cleanItems(raw, max) {
       if (seen.has(imei)) throw new RepairError('VALIDATION', `IMEI / serial ${imei} is listed twice`, 422)
       seen.add(imei)
     }
-    return { line_no: idx + 1, category, brand, model, imei, problemCategory, problemDescription: text(i.problemDescription, 1000), warranty, accessories: text(i.accessories, 200) || null }
+    return { line_no: idx + 1, category, brand, model, imei, problemCategory, problemCategories, problemDescription: text(i.problemDescription, 1000), warranty, accessories: text(i.accessories, 200) || null, color: text(i.color, 40) || null }
   })
 }
 
@@ -180,8 +182,29 @@ export async function createRequest(actor, input = {}) {
     }
   }
 
-  const mode = input.serviceMode === 'PICKUP' ? 'PICKUP' : 'DROP_OFF'
-  const address = text(input.pickupAddress, 500)
+  // Marketplace: a consumer request that nearby vendors quote on (the customer sends their address/location, or marketplace:true).
+  // Staff-booked and business requests, and requests without a location, stay on the direct (admin-assigned) flow.
+  const wantsQuotes = input.marketplace === true || !!input.addressId || !!input.location
+  const marketplace = actor.kind === 'CUSTOMER' && channel === 'B2C' && s.marketplace_enabled && input.marketplace !== false && wantsQuotes
+  let loc = { lat: null, lng: null, pincode: null, address: null }
+  if (marketplace) {
+    if (input.addressId) {
+      const { rows } = await query('SELECT * FROM addresses WHERE id = $1 AND user_id = $2', [input.addressId, actor.userId])
+      if (!rows[0]) throw new RepairError('VALIDATION', 'Choose one of your saved addresses', 422)
+      const a = rows[0]
+      loc = { lat: a.lat != null ? Number(a.lat) : null, lng: a.lng != null ? Number(a.lng) : null, pincode: a.pincode,
+        address: [a.address_line1, a.address_line2, a.landmark, a.city, a.state, a.pincode].filter(Boolean).join(', ') }
+    } else {
+      const l = input.location || {}
+      const lat = l.lat != null ? Number(l.lat) : null, lng = l.lng != null ? Number(l.lng) : null
+      if ((lat != null && !(lat >= -90 && lat <= 90)) || (lng != null && !(lng >= -180 && lng <= 180))) throw new RepairError('VALIDATION', 'Location is invalid', 422)
+      loc = { lat, lng, pincode: /^\d{6}$/.test(text(l.pincode, 10)) ? text(l.pincode, 10) : null, address: text(input.pickupAddress, 500) || null }
+    }
+    if (!loc.pincode && (loc.lat == null || loc.lng == null)) throw new RepairError('VALIDATION', 'Tell us where you are (saved address, pincode or location) so nearby repair shops can quote', 422)
+  }
+
+  const mode = !marketplace && input.serviceMode === 'PICKUP' ? 'PICKUP' : 'DROP_OFF'
+  const address = marketplace ? (loc.address || '') : text(input.pickupAddress, 500)
   if (mode === 'PICKUP' && address.length < 10) throw new RepairError('VALIDATION', 'Enter the full pickup address', 422)
   let slot = null
   if (input.pickupSlot) {
@@ -202,25 +225,36 @@ export async function createRequest(actor, input = {}) {
     const { rows } = await client.query(
       `INSERT INTO repair_requests (code, channel, user_id, created_by, created_by_role, customer_name, customer_phone, customer_email, customer_city,
           business_name, gstin, po_reference, contact_person, contract_discount_pct, payment_terms_days, service_mode, pickup_address, pickup_slot,
-          description, sla_inspection_due)
-       VALUES ('REP-' || nextval('repair_request_seq'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, NOW() + ($19 || ' hours')::interval)
+          description, sla_inspection_due, flow, customer_lat, customer_lng, customer_pincode, offers_close_at)
+       VALUES ('REP-' || nextval('repair_request_seq'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, NOW() + ($19 || ' hours')::interval,
+               $20,$21,$22,$23, CASE WHEN $20 = 'MARKETPLACE' THEN NOW() + ($24 || ' hours')::interval END)
        RETURNING *`,
       [channel, customer.userId, actor.userId, actor.kind, customer.name, customer.phone, customer.email, customer.city,
-        biz.businessName, biz.gstin, biz.poReference, biz.contactPerson, biz.discount, biz.terms, mode, mode === 'PICKUP' ? address : null, slot,
-        text(input.description, 1000), String(s.sla_inspection_hours)]
+        biz.businessName, biz.gstin, biz.poReference, biz.contactPerson, biz.discount, biz.terms, mode, mode === 'PICKUP' || marketplace ? address || null : null, slot,
+        text(input.description, 1000), String(s.sla_inspection_hours),
+        marketplace ? 'MARKETPLACE' : 'DIRECT', loc.lat, loc.lng, loc.pincode, String(s.offer_window_hours)]
     )
     const r = rows[0]
     for (const i of items) {
       await client.query(
-        `INSERT INTO repair_items (request_id, line_no, category, brand, model, imei_serial, problem_category, problem_description, warranty_status, accessories)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [r.id, i.line_no, i.category, i.brand, i.model, i.imei, i.problemCategory, i.problemDescription, i.warranty, i.accessories])
+        `INSERT INTO repair_items (request_id, line_no, category, brand, model, imei_serial, problem_category, problem_categories, problem_description, warranty_status, accessories, color)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [r.id, i.line_no, i.category, i.brand, i.model, i.imei, i.problemCategory, i.problemCategories, i.problemDescription, i.warranty, i.accessories, i.color])
     }
     await addEvent(client, r.id, 'REQUESTED', channel === 'B2B' ? 'Business repair request submitted' : 'Repair request submitted', actor, { to: 'REQUESTED', meta: { devices: items.length } })
     if (Array.isArray(input.mediaIds) && input.mediaIds.length) await claimRepairMedia(client, r, actor, input.mediaIds, 'CUSTOMER_SUBMISSION')
     return r.id
   })
-  return getManage({ kind: 'ADMIN' }, id)
+  if (marketplace) {
+    // Quotes are best-effort: the request exists either way and vendors can still quote by hand.
+    try {
+      const { generateOffers } = await import('./repairs.market.js')
+      await generateOffers(id)
+    } catch (err) {
+      logger.warn({ err: err.message, repairId: id }, 'automatic repair offers could not be generated')
+    }
+  }
+  return getManage(actor.kind === 'CUSTOMER' ? { kind: 'CUSTOMER', userId: actor.userId } : { kind: 'ADMIN' }, id)
 }
 
 // ── reads ───────────────────────────────────────────────────────────────
@@ -241,6 +275,10 @@ function serialize(r, { actor, items = [], quotes = [], payments = [], events = 
     customer: { name: r.customer_name, phone: r.customer_phone, email: r.customer_email || '', city: r.customer_city || '—' },
     business: r.channel === 'B2B' ? { name: r.business_name, gstin: r.gstin, poReference: r.po_reference, contactPerson: r.contact_person, contractDiscountPct: num(r.contract_discount_pct), paymentTermsDays: r.payment_terms_days } : null,
     serviceMode: r.service_mode, pickupAddress: r.pickup_address, pickupSlot: r.pickup_slot?.toISOString() ?? null,
+    flow: r.flow, fulfilment: r.fulfilment, appointmentAt: r.appointment_at?.toISOString() ?? null,
+    offersCloseAt: r.offers_close_at?.toISOString() ?? null, selectedOfferId: r.selected_offer_id, offerCount: Number(r.offer_count ?? 0),
+    location: r.flow === 'MARKETPLACE' ? { lat: num(r.customer_lat), lng: num(r.customer_lng), pincode: r.customer_pincode } : null,
+    rating: r.rating != null ? { stars: r.rating, review: r.review, at: r.rated_at?.toISOString() ?? null } : null,
     description: r.description,
     serviceCenterId: r.assigned_vendor_id, serviceCenter: r.vendor_name || null, technician: r.technician_name || null,
     deviceReceivedAt: r.device_received_at?.toISOString() ?? null,
@@ -255,8 +293,8 @@ function serialize(r, { actor, items = [], quotes = [], payments = [], events = 
     deviceCount: Number(r.device_count ?? items.length), deliveredCount: Number(r.delivered_count ?? items.filter((i) => i.delivered_at).length),
     note: r.decision_note || undefined,
     items: items.map((i) => ({
-      id: i.id, lineNo: i.line_no, category: i.category, brand: i.brand, model: i.model, imeiSerial: i.imei_serial, problemCategory: i.problem_category,
-      problemDescription: i.problem_description, warrantyStatus: i.warranty_status, accessories: i.accessories, status: i.item_status,
+      id: i.id, lineNo: i.line_no, category: i.category, brand: i.brand, model: i.model, imeiSerial: i.imei_serial, problemCategory: i.problem_category, problemCategories: i.problem_categories?.length ? i.problem_categories : [i.problem_category],
+      problemDescription: i.problem_description, warrantyStatus: i.warranty_status, accessories: i.accessories, color: i.color, status: i.item_status,
       diagnosis: i.diagnosis, qcPassed: i.qc_passed, qcNotes: i.qc_notes, deliveredAt: i.delivered_at?.toISOString() ?? null,
     })),
     quotes: quotes.map((q) => ({
@@ -274,6 +312,7 @@ function serialize(r, { actor, items = [], quotes = [], payments = [], events = 
 
 const SELECT = `
   SELECT r.*, v.name AS vendor_name,
+         (SELECT COUNT(*) FROM repair_offers o WHERE o.request_id = r.id AND o.status IN ('OPEN','SELECTED')) AS offer_count,
          (SELECT COUNT(*) FROM repair_items i WHERE i.request_id = r.id) AS device_count,
          (SELECT COUNT(*) FROM repair_items i WHERE i.request_id = r.id AND i.delivered_at IS NOT NULL) AS delivered_count
     FROM repair_requests r LEFT JOIN vendors v ON v.id = r.assigned_vendor_id`
@@ -424,7 +463,11 @@ export const receiveDevice = (actor, id) => tx(async (client) => {
   staffOnly(actor)
   const r = await lock(client, id, actor)
   if (!r.assigned_vendor_id) throw new RepairError('NO_SERVICE_CENTER', 'Assign a service centre before receiving the device', 409)
-  await moveTo(client, r, 'INSPECTION', actor, r.service_mode === 'PICKUP' ? 'Device picked up — inspection started' : 'Device received — inspection started', { device_received_at: new Date() })
+  if (r.fulfilment === 'PICKUP_DELIVERY') {
+    const { rows: pk } = await client.query(`SELECT 1 FROM repair_events WHERE request_id = $1 AND kind = 'PICKED_UP' LIMIT 1`, [id])
+    if (!pk[0]) throw new RepairError('INVALID_STATE', 'Mark the device as picked up from the customer first', 409)
+  }
+  await moveTo(client, r, 'INSPECTION', actor, r.fulfilment === 'PICKUP_DELIVERY' ? 'Device arrived at repair shop — inspection started' : r.service_mode === 'PICKUP' ? 'Device picked up — inspection started' : 'Device received — inspection started', { device_received_at: new Date() })
 }).then(() => getManage(actor, id))
 
 export const setDiagnosis = (actor, id, itemId, { diagnosis, repairable }) => tx(async (client) => {
@@ -602,6 +645,10 @@ export const deliver = (actor, id, { itemIds } = {}) => tx(async (client) => {
   if (!chosen.length || (Array.isArray(itemIds) && itemIds.length && chosen.length !== new Set(itemIds).size)) throw new RepairError('VALIDATION', 'Choose devices that are still waiting to be delivered', 422)
   if (chosen.length < open.length && r.channel !== 'B2B') throw new RepairError('VALIDATION', 'Consumer repairs are delivered in one go', 422)
 
+  if (r.fulfilment === 'PICKUP_DELIVERY') {
+    const { rows: od } = await client.query(`SELECT 1 FROM repair_events WHERE request_id = $1 AND kind = 'OUT_FOR_DELIVERY' LIMIT 1`, [id])
+    if (!od[0]) throw new RepairError('INVALID_STATE', 'Mark the device out for delivery first', 409)
+  }
   const repairedPath = all.some((i) => i.item_status === 'REPAIRED')
   const onCredit = repairedPath && r.payment_terms_days > 0
   if (!onCredit && amountDue(r) > 0) throw new RepairError('PAYMENT_DUE', `₹${amountDue(r)} is still due — record the payment before delivery`, 409, { due: amountDue(r) })
@@ -667,8 +714,9 @@ export const reopen = (actor, id, { reason, itemIds } = {}) => tx(async (client)
  * returns the original result and changes nothing.
  */
 export const recordPayment = (actor, id, input = {}) => tx(async (client) => {
-  platformOnly(actor)
+  staffOnly(actor)
   const { kind, method } = input
+  if (actor.kind === 'VENDOR' && kind === 'REFUND') throw new RepairError('FORBIDDEN', 'Only platform staff can refund', 403)
   if (!PAY_KINDS.includes(kind)) throw new RepairError('VALIDATION', 'Unknown payment type', 422)
   if (!METHODS.includes(method)) throw new RepairError('VALIDATION', 'Unknown payment method', 422)
   const amount = Number(input.amount)
@@ -676,6 +724,8 @@ export const recordPayment = (actor, id, input = {}) => tx(async (client) => {
   const key = text(input.idempotencyKey, 80)
   if (key.length < 8) throw new RepairError('VALIDATION', 'idempotencyKey (8–80 characters) is required', 422)
   const r = await lock(client, id, actor)
+  // Marketplace repairs are settled between the customer and the chosen shop; admin-assigned ones stay with platform finance.
+  if (actor.kind === 'VENDOR' && r.flow !== 'MARKETPLACE') throw new RepairError('FORBIDDEN', 'Only platform staff can record payments for this repair', 403)
 
   const { rows: dup } = await client.query('SELECT 1 FROM repair_payments WHERE request_id = $1 AND idempotency_key = $2', [id, key])
   if (dup[0]) return { duplicate: true }
