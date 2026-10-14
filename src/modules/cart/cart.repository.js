@@ -24,6 +24,14 @@ function cartExtraKey(prefix, userId, priceMode) {
 }
 
 /**
+ * A vendor listing that ships nationwide is purchasable by any customer even without a
+ * shop allocation: single-store mode only allocates the platform shop, which otherwise made
+ * every approved vendor B2C listing un-orderable (found in live QA 2026-10-14).
+ * B2B-only lots (sell_b2c = false) and unapproved/paused listings stay excluded.
+ */
+const MARKETPLACE_LISTING = `(s.vendor_id IS NOT NULL AND sp.approval_status = 'APPROVED' AND sp.listing_status = 'ACTIVE' AND sp.sell_b2c = TRUE AND sp.nationwide_shipping_enabled = TRUE)`
+
+/**
  * Cart repository
  *
  * - Redis: cart line items (`{ productId, shopId, quantity }`), tip and
@@ -188,11 +196,12 @@ export class CartRepository {
          JOIN products p ON p.id = sp.product_id
          JOIN shops    s ON s.id = sp.shop_id
          LEFT JOIN product_families pf ON pf.id = p.product_family_id
-         JOIN user_shop_allocations a
+         LEFT JOIN user_shop_allocations a
            ON a.shop_id = sp.shop_id
           AND a.user_id = $1
         WHERE sp.product_id  = $2
           AND sp.shop_id     = $3
+          AND (a.id IS NOT NULL OR ${MARKETPLACE_LISTING})
           AND sp.deleted_at IS NULL
           AND s.is_active    = true
           AND s.deleted_at  IS NULL`,
@@ -295,10 +304,11 @@ export class CartRepository {
          JOIN products p ON p.id = sp.product_id
          JOIN shops    s ON s.id = sp.shop_id
          LEFT JOIN product_families pf ON pf.id = p.product_family_id
-         JOIN user_shop_allocations a
+         LEFT JOIN user_shop_allocations a
            ON a.shop_id = sp.shop_id
           AND a.user_id = $1
         WHERE sp.id          = $2
+          AND (a.id IS NOT NULL OR ${MARKETPLACE_LISTING})
           AND sp.deleted_at IS NULL
           AND s.is_active    = true
           AND s.deleted_at  IS NULL`,
@@ -364,11 +374,12 @@ export class CartRepository {
          JOIN targets  t
            ON t.product_id = sp.product_id
           AND t.shop_id    = sp.shop_id
-         JOIN user_shop_allocations a
+         LEFT JOIN user_shop_allocations a
            ON a.shop_id = sp.shop_id
           AND a.user_id = $1
         WHERE sp.deleted_at IS NULL
-          AND s.deleted_at  IS NULL`,
+          AND s.deleted_at  IS NULL
+          AND (a.id IS NOT NULL OR ${MARKETPLACE_LISTING})`,
       [userId, productIds, shopIds]
     )
     return rows

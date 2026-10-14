@@ -6,6 +6,7 @@
  */
 
 import { OrdersRepository } from './orders.repository.js'
+import { wholesaleGuard } from '../../middlewares/wholesale-guard.js'
 import { CartQuoteRepository } from '../cart-quote/cart-quote.repository.js'
 import { OrdersService } from './orders.service.js'
 import { OrdersController } from './orders.controller.js'
@@ -23,7 +24,7 @@ export async function ordersRoutes(fastify) {
 
   // 1. Place an order from the current mobile cart.
   fastify.post('/', {
-    preHandler: [fastify.authenticate],
+    preHandler: [fastify.authenticate, wholesaleGuard],
     schema: { body: PlaceMobileOrderSchema },
     handler: controller.placeOrder,
   })

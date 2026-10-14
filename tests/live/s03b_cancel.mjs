@@ -1,0 +1,37 @@
+import { call, otpLogin, adminLogin, check, summary, PHONES, QA, sleep, sampleImages, vendorIdOf, categoryId, ensureAddress } from './lib.mjs'
+const A = await otpLogin(PHONES.vendorA), adm = await adminLogin(), cust = await otpLogin(PHONES.customer2)
+const tag = QA('can'); const images = await sampleImages(); const cat = await categoryId(); const addr = await ensureAddress(cust.token)
+let r = await call(adm.token,'POST','/admin/listings',{ name:`${tag} Cancel Phone`, categoryId:cat, condition:'NEW', stock:6, price:500, mrp:600, images, ownerVendorId:vendorIdOf(A.token), brand:'QA' }); const L = r.data
+const stock = async () => Number((await call(A.token,'GET',`/vendor/listings/${L.id}`)).data?.stock_quantity)
+async function place(q) { await call(cust.token,'DELETE','/cart'); await call(cust.token,'POST','/cart/items',{ shopProductId:L.id, quantity:q }); const o = await call(cust.token,'POST','/orders',{ addressId:addr.id, paymentMethod:'COD' }); return o.data?.order }
+console.log('--- customer cancels')
+let O = await place(2); check('order 1 placed', !!O?.id); check('stock 6→4', await stock()===4, await stock())
+r = await call(cust.token,'POST',`/orders/${O.id}/cancel`,{ reason:'QA customer cancel' }); check('customer cancel ok', r.status===200, JSON.stringify(r.json).slice(0,300))
+await sleep(800)
+check('stock restored to 6', await stock()===6, await stock())
+r = await call(A.token,'GET',`/seller-orders?orderId=${O.id}`); check('seller order CANCELLED', r.json?.data?.[0]?.status==='CANCELLED', r.json?.data?.[0]?.status)
+r = await call(cust.token,'POST',`/orders/${O.id}/cancel`,{}); check('double cancel rejected/idempotent (no 500)', r.status<500, r.status+' '+r.json?.message)
+await sleep(500); check('stock not restored twice', await stock()===6, await stock())
+console.log('--- vendor cancels')
+O = await place(3); check('order 2 placed', !!O?.id); check('stock 6→3', await stock()===3)
+const so = (await call(A.token,'GET',`/seller-orders?orderId=${O.id}`)).json?.data?.[0]
+r = await call(A.token,'POST',`/seller-orders/${so.id}/status`,{status:'CANCELLED', reason:'QA out of stock'}); check('vendor cancel ok', r.status===200, JSON.stringify(r.json).slice(0,300))
+await sleep(800)
+check('stock restored after vendor cancel', await stock()===6, 'stock='+await stock())
+r = await call(cust.token,'GET',`/orders/${O.id}`); console.log('   customer sees order status:', r.data?.status||r.data?.order?.status)
+check('parent order becomes CANCELLED', /CANCEL/.test(r.data?.status||r.data?.order?.status||''), r.data?.status)
+r = await call(A.token,'POST',`/seller-orders/${so.id}/status`,{status:'CONFIRMED'}); check('cannot re-confirm cancelled', r.status>=400, r.status)
+console.log('--- cancel after pack by customer')
+O = await place(1); const so3 = (await call(A.token,'GET',`/seller-orders?orderId=${O.id}`)).json?.data?.[0]
+await call(A.token,'POST',`/seller-orders/${so3.id}/status`,{status:'CONFIRMED'}); await call(A.token,'POST',`/seller-orders/${so3.id}/status`,{status:'PACKED'})
+r = await call(cust.token,'POST',`/orders/${O.id}/cancel`,{ reason:'QA late cancel' }); console.log('   late cancel ->', r.status, r.json?.message)
+await call(cust.token,'POST',`/orders/${O.id}/cancel`,{}); 
+console.log('--- over-sell race: stock 1, two parallel orders')
+await call(A.token,'PATCH',`/vendor/listings/${L.id}`,{stock:1}); await sleep(300)
+await call(cust.token,'DELETE','/cart'); await call(cust.token,'POST','/cart/items',{ shopProductId:L.id, quantity:1 })
+const cust1 = await otpLogin(PHONES.customer); const a1 = await ensureAddress(cust1.token); await call(cust1.token,'DELETE','/cart'); const add = await call(cust1.token,'POST','/cart/items',{ shopProductId:L.id, quantity:1 })
+const [o1,o2] = await Promise.all([ call(cust.token,'POST','/orders',{ addressId:addr.id, paymentMethod:'COD' }), call(cust1.token,'POST','/orders',{ addressId:a1.id, paymentMethod:'COD' }) ])
+console.log('   statuses', o1.status, o2.status, o1.json?.message, o2.json?.message, 'cart2 add', add.status)
+check('exactly one order wins the last unit', [o1.status,o2.status].filter(x=>x===201).length===1, `${o1.status}/${o2.status}`)
+check('stock never negative', (await stock())>=0, await stock())
+process.exit(summary()?1:0)

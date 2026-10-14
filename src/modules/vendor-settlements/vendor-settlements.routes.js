@@ -96,4 +96,29 @@ export const vendorSettlementsRoutes = async function settlementsVendorRoutes(fa
       })
     },
   })
+
+  fastify.get('/payouts', {
+    preHandler: [fastify.authenticate, requireVendorScope({ requireVendor: true })],
+    handler: async (request) => {
+      const { status = '', page = 1, limit = 20 } = request.query || {}
+      return { success: true, ...(await service.vendorPayouts(request.vendorId, { status: String(status), page: Number(page), limit: Number(limit) })) }
+    },
+  })
+
+  fastify.post('/transfer-to-wallet', {
+    preHandler: [fastify.authenticate, requireVendorScope({ requireVendor: true })],
+    schema: { body: { type: 'object', required: ['amount'], properties: { amount: { type: 'number' }, idempotencyKey: { type: 'string', maxLength: 60 } }, additionalProperties: false } },
+    handler: async (request, reply) => {
+      try {
+        const data = await service.transferToWallet(request.vendorId, request.user.id, request.body)
+        return { success: true, data }
+      } catch (err) {
+        if (err.statusCode && err.statusCode < 500) {
+          const extra = err.required != null ? { required: err.required, balance: err.balance, shortfall: err.shortfall } : {}
+          return reply.code(err.statusCode).send({ success: false, message: err.message, code: err.code, ...extra })
+        }
+        throw err
+      }
+    },
+  })
 }

@@ -1,0 +1,57 @@
+import { call, otpLogin, adminLogin, check, summary, PHONES, sleep, sampleImages, vendorIdOf, categoryId } from './lib.mjs'
+const A = await otpLogin(PHONES.vendorA), B = await otpLogin(PHONES.vendorB), adm = await adminLogin()
+const vA = vendorIdOf(A.token), vB = vendorIdOf(B.token); const images = await sampleImages(); const cat = await categoryId()
+const bal = async (t) => Number((await call(t,'GET','/vendor/b2b/wallet')).data?.balance)
+const model = `QY${Date.now().toString(36).toUpperCase()}`
+await call(adm.token,'POST','/admin/listings',{ name:`${model} Phone 64GB`, categoryId:cat, condition:'NEW', stock:50, price:1000, mrp:1500, images, ownerVendorId:vA, brand:'QA' })
+const deadline = () => new Date(Date.now()+3*864e5).toISOString()
+async function flow(qty, price, { pay = true } = {}) {
+  const r1 = await call(B.token,'POST','/vendor/b2b/requirements',{ productName:`${model} Phone`, quantity:qty, responseDeadline:deadline(), conditionPref:'NEW', targetPrice:price, deliveryCity:'Bengaluru', deliveryPincode:'560034' })
+  const R = r1.data; const q = await call(A.token,'POST',`/vendor/b2b/requirements/${R.id}/quote`,{ quantity:qty, unitPrice:price, condition:'NEW', deliveryDays:1 })
+  const det = await call(B.token,'GET',`/vendor/b2b/requirements/${R.id}`); const qid = det.data.quotes[0].id
+  const aw = await call(B.token,'POST',`/vendor/b2b/requirements/${R.id}/award`,{ selections:[{quoteId:qid,quantity:qty}] })
+  let pr = null; if (pay) pr = await call(B.token,'POST',`/vendor/b2b/requirements/${R.id}/pay`,{ method:'WALLET' })
+  const ord = (await call(A.token,'GET','/vendor/b2b/orders?role=selling')).json.data.find(o=>o.requirement_id===R.id)
+  return { R, qid, aw, pr, ord }
+}
+console.log('--- insufficient wallet')
+const b0 = await bal(B.token)
+let f = await flow(10, Math.ceil((b0+1000)/10), {}); const pr = await call(B.token,'POST',`/vendor/b2b/requirements/${f.R.id}/pay`,{ method:'WALLET' })
+check('402 INSUFFICIENT_WALLET', pr.status===402 && pr.json?.code==='INSUFFICIENT_WALLET', pr.status+' '+JSON.stringify(pr.json)); check('shortfall reported', pr.json?.shortfall>0)
+check('balance unchanged', Math.abs(await bal(B.token)-b0)<0.01)
+const cx = await call(B.token,'POST',`/vendor/b2b/requirements/${f.R.id}/cancel`); check('buyer cancels unpaid requirement', cx.status===200, JSON.stringify(cx.json).slice(0,200))
+console.log('--- seller cancels paid order → full refund')
+const b1 = await bal(B.token); f = await flow(5, 1000); check('paid 5000', Math.abs(b1-await bal(B.token)-5000)<0.01, f.pr?.status+JSON.stringify(f.pr?.json).slice(0,200))
+let r = await call(B.token,'POST',`/vendor/b2b/orders/${f.ord.id}/cancel`,{ reason:'x' }); check('buyer cannot use seller cancel', r.status>=400, r.status)
+r = await call(A.token,'POST',`/vendor/b2b/orders/${f.ord.id}/cancel`,{}); check('cancel needs a reason', r.status===400, r.status)
+r = await call(A.token,'POST',`/vendor/b2b/orders/${f.ord.id}/cancel`,{ reason:'QA out of stock' }); check('seller cancels paid order', r.status===200, JSON.stringify(r.json).slice(0,200))
+await sleep(400); check('buyer refunded exactly 5000', Math.abs(await bal(B.token)-b1)<0.01, `${await bal(B.token)} vs ${b1}`)
+r = await call(A.token,'POST',`/vendor/b2b/orders/${f.ord.id}/cancel`,{ reason:'again' }); check('second cancel rejected (no double refund)', r.status>=400, r.status); check('still refunded once', Math.abs(await bal(B.token)-b1)<0.01)
+const rq = await call(B.token,'GET',`/vendor/b2b/requirements/${f.R.id}`); console.log('   requirement after seller cancel:', rq.data?.status, 'qty remaining', rq.data?.quantity_remaining ?? rq.data?.remaining)
+console.log('--- dispute: short delivery, admin PARTIAL')
+const b2 = await bal(B.token), a2 = await bal(A.token); f = await flow(10, 1000); 
+await call(A.token,'POST',`/vendor/b2b/orders/${f.ord.id}/status`,{ status:'DISPATCHED', fulfilmentType:'DELIVERY', courierName:'QA', awb:'D1' }); await call(A.token,'POST',`/vendor/b2b/orders/${f.ord.id}/status`,{ status:'DELIVERED' })
+r = await call(B.token,'POST',`/vendor/b2b/orders/${f.ord.id}/receive`,{ receivedQuantity:7, note:'3 missing' }); check('buyer reports 7 of 10', r.status===200)
+let od = await call(B.token,'GET',`/vendor/b2b/orders/${f.ord.id}`); check('order DISPUTED', od.data?.status==='DISPUTED', od.data?.status)
+r = await call(A.token,'POST',`/admin/b2b/orders/${f.ord.id}/resolve`,{ decision:'PARTIAL', releaseQuantity:7 }); check('vendor cannot resolve', r.status>=400, r.status)
+r = await call(adm.token,'POST',`/admin/b2b/orders/${f.ord.id}/resolve`,{ decision:'PARTIAL', releaseQuantity:0 }); check('release qty 0 rejected', r.status===400, r.status)
+r = await call(adm.token,'POST',`/admin/b2b/orders/${f.ord.id}/resolve`,{ decision:'PARTIAL', releaseQuantity:7, note:'QA' }); check('admin resolves PARTIAL 7', r.status===200, JSON.stringify(r.json).slice(0,200))
+await sleep(400); const b3 = await bal(B.token), a3 = await bal(A.token)
+console.log('   buyer net', b3-b2, 'seller net', a3-a2)
+check('buyer net = -7000 (3000 refunded)', Math.abs((b3-b2)+7000)<0.01, b3-b2); check('seller got 7000 minus commission', (a3-a2)>6000 && (a3-a2)<7000, a3-a2)
+r = await call(adm.token,'POST',`/admin/b2b/orders/${f.ord.id}/resolve`,{ decision:'REFUND' }); check('re-resolve rejected', r.status===409, r.status)
+console.log('--- withdraw / dismiss / foreign access')
+const r1 = await call(B.token,'POST','/vendor/b2b/requirements',{ productName:`${model} Phone`, quantity:3, responseDeadline:deadline() }); const R2 = r1.data
+const q2 = await call(A.token,'POST',`/vendor/b2b/requirements/${R2.id}/quote`,{ quantity:3, unitPrice:900 }); const qid2 = (await call(B.token,'GET',`/vendor/b2b/requirements/${R2.id}`)).data.quotes[0].id
+r = await call(B.token,'POST',`/vendor/b2b/quotes/${qid2}/withdraw`); check('buyer cannot withdraw seller quote', r.status>=400, r.status)
+r = await call(A.token,'POST',`/vendor/b2b/quotes/${qid2}/withdraw`); check('seller withdraws quote', r.status===200, JSON.stringify(r.json).slice(0,200))
+r = await call(B.token,'POST',`/vendor/b2b/requirements/${R2.id}/award`,{ selections:[{quoteId:qid2,quantity:3}] }); check('cannot award withdrawn quote', r.status>=400, r.status)
+r = await call(A.token,'POST',`/vendor/b2b/requirements/${R2.id}/dismiss`); check('seller dismisses', r.status===200, r.status)
+r = await call(A.token,'GET','/vendor/b2b/requirements?scope=open'); check('dismissed hidden', !(r.json.data||[]).some(x=>x.id===R2.id))
+r = await call(A.token,'POST',`/vendor/b2b/requirements/${R2.id}/cancel`); check('seller cannot cancel buyer demand', r.status>=400, r.status)
+r = await call(B.token,'POST',`/vendor/b2b/requirements/${R2.id}/cancel`); check('buyer cancels', r.status===200)
+r = await call(A.token,'POST',`/vendor/b2b/requirements/${R2.id}/quote`,{ quantity:3, unitPrice:900 }); check('quote on cancelled demand rejected', r.status>=400, r.status)
+// order list isolation
+const oa = await call(A.token,'GET','/vendor/b2b/orders?role=buying'); check('A buying list excludes B orders', !(oa.json.data||[]).some(o=>o.buyer_vendor_id===vB))
+const ox = await call(A.token,'GET',`/vendor/b2b/orders/${f.ord.id}`); console.log('   A reads own sold order', ox.status)
+process.exit(summary()?1:0)

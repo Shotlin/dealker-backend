@@ -17,6 +17,11 @@ function generateSlug(name) {
     .replace(/^-+|-+$/g, '')
 }
 
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/
+const PINCODE_RE = /^[1-9][0-9]{5}$/
+const validation = (message) => Object.assign(new Error(message), { statusCode: 400, code: 'VALIDATION_ERROR' })
+
 export class VendorsService {
   /**
    * @param {import('./vendors.repository.js').VendorsRepository} repository
@@ -69,8 +74,15 @@ export class VendorsService {
    * @param {object} data
    * @returns {Promise<object>}
    */
-  async updateVendor(id, data) {
+  async updateVendor(id, data, { asVendor = false } = {}) {
     await this.getVendorById(id)
+    if (asVendor) {
+      // A vendor may only change how they are reached; slug, activation and anything else is platform-controlled.
+      data = Object.fromEntries(Object.entries(data).filter(([k]) => ['name', 'email', 'phone'].includes(k)))
+      if (data.name !== undefined) data.name = String(data.name).trim()
+      if (data.email !== undefined) data.email = String(data.email).trim().toLowerCase()
+      if (data.name !== undefined && data.name.length < 2) throw validation('Store name must be at least 2 characters')
+    }
 
     if (data.email || data.phone) {
       const duplicate = await this.repository.findDuplicate(data.email, data.phone, id)
@@ -82,7 +94,7 @@ export class VendorsService {
       }
     }
 
-    if (data.name && !data.slug) {
+    if (data.name && !data.slug && !asVendor) {
       data.slug = generateSlug(data.name)
     }
 
@@ -146,9 +158,37 @@ export class VendorsService {
    * @param {object} profileData
    * @returns {Promise<object>}
    */
-  async updateProfile(vendorId, profileData) {
-    await this.getVendorById(vendorId)
-    return this.repository.updateProfile(vendorId, profileData)
+  async updateProfile(vendorId, profileData, { asVendor = false } = {}) {
+    const vendor = await this.getVendorById(vendorId)
+    const data = { ...profileData }
+    const upper = (v) => String(v).trim().toUpperCase()
+    if (data.gstin !== undefined) data.gstin = upper(data.gstin)
+    if (data.pan_number !== undefined) data.pan_number = upper(data.pan_number)
+    if (data.gstin && !GSTIN_RE.test(data.gstin)) throw validation('GSTIN must be 15 characters, like 29ABCDE1234F1Z5')
+    if (data.pan_number && !PAN_RE.test(data.pan_number)) throw validation('PAN must look like ABCDE1234F')
+    if (data.pincode && !PINCODE_RE.test(String(data.pincode).trim())) throw validation('Pincode must be 6 digits')
+    for (const k of ['city', 'state', 'address_line1', 'address_line2', 'legal_name']) {
+      if (data[k] !== undefined) data[k] = String(data[k]).trim()
+    }
+    if (asVendor) {
+      // Identity details that KYC verified can only be changed through support; blanks can still be filled in.
+      const verified = ['VERIFIED', 'ACTIVE'].includes(vendor.status)
+      const locked = ['legal_name', 'gstin', 'pan_number', 'trade_license_number', 'fssai_license']
+      for (const k of locked) {
+        if (data[k] === undefined) continue
+        const current = String(vendor.profile?.[k] ?? '').trim()
+        if (verified && current && data[k] !== current) {
+          const err = new Error('This detail was verified during KYC. Contact support to change it.')
+          // 409 not 403: the global handler treats thrown 401/403 from non-Fastify errors as upstream faults (502).
+          err.statusCode = 409
+          err.code = 'PROFILE_LOCKED'
+          err.field = k
+          throw err
+        }
+      }
+      delete data.metadata // internal flags are not vendor-editable
+    }
+    return this.repository.updateProfile(vendorId, data)
   }
 
   /**

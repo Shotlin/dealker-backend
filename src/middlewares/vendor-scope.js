@@ -36,6 +36,8 @@ import { ERROR_CODES, HTTP_STATUS } from '../constants/errors.js'
 
 const VENDOR_STAFF_ACTIVE_CACHE_PREFIX = 'meet-commerce:vendor-staff-active:v1:'
 const VENDOR_STAFF_ACTIVE_TTL_SECONDS = 300
+/** Vendors who have not been approved yet may still reach the KYC / profile routes (and only those) to finish onboarding. */
+export const ONBOARDING_STATUSES = ['PENDING_ONBOARDING', 'KYC_SUBMITTED', 'UNDER_REVIEW', 'CORRECTION_REQUIRED']
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
@@ -76,8 +78,8 @@ export async function invalidateVendorStaffCache(userId, vendorId) {
  * @param {string} vendorId
  * @returns {Promise<boolean>}
  */
-export async function isVendorStaffActive(userId, vendorId) {
-  const cacheKey = vendorStaffCacheKey(userId, vendorId)
+export async function isVendorStaffActive(userId, vendorId, { onboarding = false } = {}) {
+  const cacheKey = vendorStaffCacheKey(userId, vendorId) + (onboarding ? ':onb' : '')
   const cached = await cacheGet(cacheKey)
   if (cached !== null && cached !== undefined) {
     return cached === true
@@ -92,10 +94,10 @@ export async function isVendorStaffActive(userId, vendorId) {
         AND vu.vendor_id = $2
         AND vu.is_active = true
         AND vu.deleted_at IS NULL
-        AND v.is_active = true
+        AND (v.is_active = true OR ($3::boolean AND v.status = ANY($4::text[])))
         AND v.deleted_at IS NULL
       LIMIT 1`,
-    [userId, vendorId]
+    [userId, vendorId, onboarding, ONBOARDING_STATUSES]
   ).catch(async () => {
     // Fallback query for legacy compatibility before migration 095
     return await query(
@@ -173,7 +175,7 @@ export function extractVendorId(req) {
  * @param {string} userId
  * @returns {Promise<string[]>} active vendor UUIDs
  */
-export async function findActiveVendorMemberships(userId) {
+export async function findActiveVendorMemberships(userId, { onboarding = false } = {}) {
   const { rows } = await query(
     `SELECT vu.vendor_id
        FROM vendor_users vu
@@ -181,10 +183,10 @@ export async function findActiveVendorMemberships(userId) {
       WHERE vu.user_id = $1
         AND vu.is_active = true
         AND vu.deleted_at IS NULL
-        AND v.is_active = true
+        AND (v.is_active = true OR ($2::boolean AND v.status = ANY($3::text[])))
         AND v.deleted_at IS NULL
       ORDER BY vu.created_at`,
-    [userId]
+    [userId, onboarding, ONBOARDING_STATUSES]
   )
   return rows.map((row) => row.vendor_id)
 }
@@ -197,6 +199,7 @@ export async function findActiveVendorMemberships(userId) {
  */
 export function requireVendorScope(options = {}) {
   const requireVendor = options.requireVendor === true
+  const onboarding = options.allowOnboarding === true
 
   return async function vendorScopePreHandler(request, reply) {
     const user = request.user
@@ -212,7 +215,7 @@ export function requireVendorScope(options = {}) {
 
     // 1. Vendor-scoped JWT caller
     if (source === 'jwt' && candidateVendorId) {
-      const active = await isVendorStaffActive(user.id, candidateVendorId)
+      const active = await isVendorStaffActive(user.id, candidateVendorId, { onboarding })
       if (!active) {
         logger.warn(
           { userId: user.id, vendorId: candidateVendorId, action: 'vendor_scope_rejected_inactive_staff' },
@@ -254,7 +257,7 @@ export function requireVendorScope(options = {}) {
     }
 
     // 3. Vendor staff user without JWT vendor claims — resolve memberships
-    const memberships = await findActiveVendorMemberships(user.id)
+    const memberships = await findActiveVendorMemberships(user.id, { onboarding })
     if (memberships.length === 1) {
       request.vendorId = memberships[0]
       return

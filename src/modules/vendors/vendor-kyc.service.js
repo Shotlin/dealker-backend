@@ -52,7 +52,7 @@ export class VendorKycService {
    * @param {object} payload
    * @returns {Promise<object>}
    */
-  async submitKyc(vendorId, payload) {
+  async submitKyc(vendorId, payload, { asVendor = false } = {}) {
     const vendor = await this.vendorRepository.findById(vendorId)
     if (!vendor) {
       const err = new Error('Vendor not found')
@@ -64,6 +64,20 @@ export class VendorKycService {
     // Validate state transition (allows PENDING_ONBOARDING -> KYC_SUBMITTED or CORRECTION_REQUIRED -> KYC_SUBMITTED)
     const targetStatus = 'KYC_SUBMITTED'
     this.validateStateTransition(vendor.status, targetStatus)
+
+    if (asVendor) {
+      // A vendor can only reference files it uploaded itself (private storage); no external links or other vendors' files.
+      const { isOwnKey, fileExists } = await import('../vendor-kyc-files/vendor-kyc-files.service.js')
+      for (const doc of payload.documents) {
+        if (!isOwnKey(vendorId, doc.file_key) || !(await fileExists(doc.file_key))) {
+          const e = new Error('Upload each document through the app first')
+          e.statusCode = 400
+          e.code = 'VALIDATION_ERROR'
+          throw e
+        }
+        delete doc.file_url
+      }
+    }
 
     // Save document metadata
     const savedDocs = []

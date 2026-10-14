@@ -8,7 +8,12 @@
  * @module modules/seller-orders/seller-orders.service
  */
 
-import { query } from '../../config/database.js'
+import { query, getClient } from '../../config/database.js'
+import { logger } from '../../config/logger.js'
+import { ShopProductsRepository } from '../shop-products/shop-products.repository.js'
+
+const shopProductsRepo = new ShopProductsRepository()
+const TERMINAL = new Set(['CANCELLED', 'DELIVERED', 'CLOSED', 'RETURNED'])
 
 const ALLOWED_STATUS = new Set([
   'ORDER_PLACED', 'CONFIRMED', 'PACKED', 'READY_TO_SHIP', 'SHIPPED',
@@ -143,6 +148,25 @@ export class SellerOrdersService {
     }
     if (current.status === nextStatus) return current
 
+    // A finished order cannot be re-opened by a vendor (a cancelled order used to be confirmable again).
+    if (vendorId && TERMINAL.has(current.status)) {
+      const err = new Error(`This order is already ${current.status.toLowerCase()}`)
+      err.code = 'FORBIDDEN_TRANSITION'
+      err.statusCode = 409
+      throw err
+    }
+
+    if (nextStatus === 'CANCELLED') return this.#cancel(current, vendorId, actorId, reason)
+
+    // Dispatch / delivery must go through shipment tracking: it rolls the parent
+    // order up and posts the vendor settlement. Setting them here would skip both.
+    if (['SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(nextStatus)) {
+      const err = new Error('Add shipment tracking to mark this order shipped or delivered')
+      err.code = 'FORBIDDEN_TRANSITION'
+      err.statusCode = 409
+      throw err
+    }
+
     if (vendorId) {
       const vendorAllowed = new Set(['CONFIRMED', 'PACKED', 'READY_TO_SHIP', 'CANCELLED'])
       if (!vendorAllowed.has(nextStatus)) {
@@ -170,8 +194,10 @@ export class SellerOrdersService {
       CANCELLED: 'CANCELLED',
     }
 
-    const sets = ['status = $' + (params.length + 1), 'updated_at = NOW()']
-    const updateParams = [...params, nextStatus]
+    // Explicit placeholders: with a vendor scope `params` already holds two
+    // values, which left $2 untyped and made every vendor status change a 500.
+    const sets = ['status = $2', 'updated_at = NOW()']
+    const updateParams = [id, nextStatus]
     if (reason) {
       updateParams.push(reason)
       sets.push(`cancellation_reason = $${updateParams.length}`)
@@ -188,5 +214,85 @@ export class SellerOrdersService {
       )
     }
     return this.getById(id, vendorId)
+  }
+
+  /**
+   * Cancel one vendor's slice: restore its stock, and when every slice of the parent order is
+   * cancelled, cancel the parent too. Prepaid parents are flagged for refund, never silently dropped.
+   */
+  async #cancel(current, vendorId, actorId, reason) {
+    const client = await getClient()
+    let parentCancelled = false
+    let refundRequired = false
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        `UPDATE seller_orders
+            SET status = 'CANCELLED', fulfilment_status = 'CANCELLED', cancelled_at = NOW(),
+                cancellation_reason = COALESCE($2, cancellation_reason), updated_at = NOW()
+          WHERE id = $1`,
+        [current.id, reason || null]
+      )
+      const { rows: items } = await client.query(
+        `SELECT shop_product_id AS "shopProductId", quantity, product_name AS name
+           FROM order_items WHERE seller_order_id = $1`,
+        [current.id]
+      )
+      await shopProductsRepo.restoreStockForCancelledOrder(client, {
+        orderId: current.order_id, items, source: 'API', actor: { userId: actorId },
+      })
+      const { rows: left } = await client.query(
+        `SELECT 1 FROM seller_orders WHERE order_id = $1 AND status <> 'CANCELLED' LIMIT 1`,
+        [current.order_id]
+      )
+      if (!left.length) {
+        const { rows: parent } = await client.query(
+          `SELECT status, payment_status FROM orders WHERE id = $1 FOR UPDATE`, [current.order_id]
+        )
+        const o = parent[0]
+        if (o && !['CANCELLED', 'REFUNDED', 'DELIVERED'].includes(o.status)) {
+          await client.query(
+            `UPDATE orders SET status = 'CANCELLED', cancelled_reason = COALESCE($2, cancelled_reason), updated_at = NOW() WHERE id = $1`,
+            [current.order_id, reason || 'Cancelled by seller']
+          )
+          await client.query(
+            `INSERT INTO order_status_history (order_id, from_status, to_status, changed_by, note) VALUES ($1,$2,'CANCELLED',$3,$4)`,
+            [current.order_id, o.status, actorId, reason || 'Cancelled by seller']
+          )
+          parentCancelled = true
+          // Wallet money goes straight back (idempotent per order); gateway money still needs a refund from finance.
+          const { rows: po } = await client.query(
+            `SELECT customer_id, wallet_amount, amount_paid FROM orders WHERE id = $1`, [current.order_id]
+          )
+          const walletBack = Number(po[0]?.wallet_amount || 0)
+          if (walletBack > 0 && po[0]?.customer_id) {
+            const { rows: done } = await client.query(
+              `SELECT 1 FROM wallet_transactions WHERE reference_id = $1 AND sub_type = 'REFUND' AND description LIKE 'Order cancelled by seller%' LIMIT 1`,
+              [String(current.order_id)]
+            )
+            if (!done[0]) {
+              await client.query('INSERT INTO wallets (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING', [po[0].customer_id])
+              const { rows: w } = await client.query('SELECT id FROM wallets WHERE user_id = $1 FOR UPDATE', [po[0].customer_id])
+              const up = await client.query('UPDATE wallets SET balance = balance + $1, updated_at = NOW() WHERE id = $2 RETURNING balance', [walletBack, w[0].id])
+              await client.query(
+                `INSERT INTO wallet_transactions (wallet_id, type, amount, description, reference_id, balance_after, sub_type, order_id)
+                 VALUES ($1, 'CREDIT', $2, 'Order cancelled by seller — wallet amount refunded', $3, $4, 'REFUND', $5)`,
+                [w[0].id, walletBack, String(current.order_id), up.rows[0].balance, current.order_id]
+              )
+            }
+          }
+          refundRequired = Number(po[0]?.amount_paid || 0) > 0
+        }
+      }
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw err
+    } finally {
+      client.release()
+    }
+    if (refundRequired) logger.warn({ orderId: current.order_id, sellerOrderId: current.id }, 'Seller cancelled a prepaid order — refund must be issued')
+    const row = await this.getById(current.id, vendorId)
+    return { ...row, parent_cancelled: parentCancelled, refund_required: refundRequired }
   }
 }

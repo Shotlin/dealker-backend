@@ -84,6 +84,8 @@ export class VendorSettlementsService {
   }
 
   async #vendorBalance(client, vendorId) {
+    // Same key as ads / b2b / auctions: every ledger writer serialises per vendor, so balance_after never goes stale.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`settlement:${vendorId}`])
     const { rows } = await client.query(
       `SELECT COALESCE(SUM(amount), 0) AS bal FROM settlement_ledger WHERE vendor_id = $1`,
       [vendorId]
@@ -142,11 +144,74 @@ export class VendorSettlementsService {
 
   // ── Reads ─────────────────────────────────────────────────────────────
 
+  /**
+   * Vendor: move money from the settlement balance into the vendor user's Dealker wallet.
+   * Auction registration fees and winning-bid payments are charged to that wallet, and the
+   * vendor app has no card/UPI top-up, so this is how earnings fund auctions.
+   */
+  async transferToWallet(vendorId, userId, { amount, idempotencyKey = null }) {
+    const value = Number(amount)
+    if (!Number.isFinite(value) || value < 1) {
+      const err = new Error('Enter an amount of at least ₹1'); err.statusCode = 422; err.code = 'VALIDATION'; throw err
+    }
+    if (value > 500000) {
+      const err = new Error('Maximum transfer is ₹5,00,000'); err.statusCode = 422; err.code = 'VALIDATION'; throw err
+    }
+    const amountRounded = Number(value.toFixed(2))
+    const key = idempotencyKey ? `wtx:${vendorId}:${String(idempotencyKey).slice(0, 60)}` : null
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      if (key) {
+        const { rows } = await client.query('SELECT 1 FROM settlement_ledger WHERE idempotency_key = $1', [key])
+        if (rows[0]) { await client.query('ROLLBACK'); return { replayed: true } }
+      }
+      const balance = await this.#vendorBalance(client, vendorId) // takes the settlement lock
+      const { rows: holds } = await client.query(
+        'SELECT 1 FROM settlement_holds WHERE vendor_id = $1 AND is_active = TRUE LIMIT 1', [vendorId]
+      )
+      if (holds[0]) {
+        const err = new Error('Your settlements are on hold. Contact support.'); err.statusCode = 409; err.code = 'SETTLEMENT_HOLD'; throw err
+      }
+      if (balance < amountRounded) {
+        const err = new Error('Not enough settlement balance to move this amount')
+        err.statusCode = 402; err.code = 'INSUFFICIENT_SETTLEMENT'; err.required = amountRounded; err.balance = balance; err.shortfall = Number((amountRounded - balance).toFixed(2))
+        throw err
+      }
+      const ref = key || `wtx:${vendorId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`
+      await client.query(
+        `INSERT INTO settlement_ledger (vendor_id, entry_type, amount, balance_after, reason, actor_id, idempotency_key)
+         VALUES ($1, 'ADJUSTMENT', $2, $3, 'Moved to Dealker wallet', $4, $5)`,
+        [vendorId, -amountRounded, Number((balance - amountRounded).toFixed(2)), userId || null, ref]
+      )
+      await client.query('INSERT INTO wallets (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING', [userId])
+      const { rows: w } = await client.query('SELECT id, balance FROM wallets WHERE user_id = $1 FOR UPDATE', [userId])
+      const credited = await client.query(
+        'UPDATE wallets SET balance = balance + $1, updated_at = NOW() WHERE id = $2 RETURNING balance', [amountRounded, w[0].id]
+      )
+      await client.query(
+        `INSERT INTO wallet_transactions (wallet_id, type, amount, description, reference_id, balance_after, sub_type, source_id)
+         VALUES ($1, 'CREDIT', $2, 'Moved from vendor settlement balance', $3, $4, 'VENDOR_TRANSFER', $5)`,
+        [w[0].id, amountRounded, vendorId, credited.rows[0].balance, vendorId]
+      )
+      await client.query('COMMIT')
+      return { moved: amountRounded, settlement_balance: Number((balance - amountRounded).toFixed(2)), wallet_balance: Number(credited.rows[0].balance) }
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw err
+    } finally {
+      client.release()
+    }
+  }
+
   async vendorSummary(vendorId) {
+    // `available` is the true ledger balance: payouts are negative entries and must reduce what the vendor can spend
+    // (it used to ignore them, so the app showed ₹1L+ more than the wallet could actually pay).
     const { rows } = await query(
       `SELECT
-         COALESCE(SUM(amount) FILTER (WHERE entry_type NOT IN ('PAYOUT')), 0) AS available,
-         COALESCE(ABS(SUM(amount) FILTER (WHERE entry_type = 'PAYOUT')), 0) AS paid,
+         COALESCE(SUM(amount), 0) AS available,
+         COALESCE(ABS(SUM(amount) FILTER (WHERE entry_type = 'PAYOUT')), 0) AS payout_debits,
+         (SELECT COALESCE(SUM(p.amount), 0) FROM settlement_payouts p WHERE p.vendor_id = $1 AND p.status IN ('PENDING', 'PROCESSING')) AS payouts_in_progress,
          (SELECT COUNT(*) FROM seller_orders so WHERE so.vendor_id = $1 AND so.payout_status = 'PENDING' AND so.status = 'DELIVERED') AS pending_orders,
          (SELECT COALESCE(SUM(so.payable_to_seller), 0) FROM seller_orders so WHERE so.vendor_id = $1 AND so.payout_status = 'PENDING' AND so.status = 'DELIVERED') AS next_payout
        FROM settlement_ledger WHERE vendor_id = $1`,
@@ -154,7 +219,9 @@ export class VendorSettlementsService {
     )
     return {
       available: Number(rows[0]?.available || 0),
-      paid: Number(rows[0]?.paid || 0),
+      // The ledger debit happens when a payout is created, so money still on its way is not "paid" yet.
+      paid: Math.max(0, Number((Number(rows[0]?.payout_debits || 0) - Number(rows[0]?.payouts_in_progress || 0)).toFixed(2))),
+      payoutsInProgress: Number(rows[0]?.payouts_in_progress || 0),
       pendingOrders: Number(rows[0]?.pending_orders || 0),
       nextPayout: Number(rows[0]?.next_payout || 0),
     }
@@ -252,6 +319,39 @@ export class VendorSettlementsService {
       [payoutId, utrNumber || null]
     )
     return rows[0] || null
+  }
+
+  /** A vendor's own payouts (what Dealker sent or is sending to their bank). Internal notes and staff ids are never exposed. */
+  async vendorPayouts(vendorId, { status = '', page = 1, limit = 20 } = {}) {
+    const lim = Math.min(100, Math.max(1, Number(limit) || 20))
+    const pg = Math.max(1, Number(page) || 1)
+    const params = [vendorId]
+    let where = 'WHERE p.vendor_id = $1'
+    const st = String(status || '').toUpperCase()
+    if (['PENDING', 'PROCESSING', 'PAID', 'FAILED', 'CANCELLED'].includes(st)) { params.push(st); where += ` AND p.status = $${params.length}` }
+    const [{ rows }, { rows: agg }, { rows: cnt }] = await Promise.all([
+      query(
+        `SELECT p.id, p.payout_number, p.amount, p.status, p.utr_number, p.paid_at, p.created_at
+           FROM settlement_payouts p ${where} ORDER BY p.created_at DESC, p.id DESC LIMIT ${lim} OFFSET ${(pg - 1) * lim}`, params),
+      query(
+        `SELECT COALESCE(SUM(amount) FILTER (WHERE status = 'PAID'), 0) AS paid,
+                COALESCE(SUM(amount) FILTER (WHERE status IN ('PENDING', 'PROCESSING')), 0) AS in_progress,
+                COUNT(*) FILTER (WHERE status = 'PAID')::int AS paid_count,
+                COUNT(*) FILTER (WHERE status IN ('PENDING', 'PROCESSING'))::int AS in_progress_count
+           FROM settlement_payouts WHERE vendor_id = $1`, [vendorId]),
+      query(`SELECT COUNT(*)::int AS n FROM settlement_payouts p ${where}`, params),
+    ])
+    return {
+      data: rows.map((r) => ({
+        id: r.id, payout_number: r.payout_number, amount: Number(r.amount), status: r.status,
+        utr_number: r.utr_number || null, paid_at: r.paid_at, created_at: r.created_at,
+      })),
+      summary: {
+        paid: Number(agg[0].paid), in_progress: Number(agg[0].in_progress),
+        paid_count: agg[0].paid_count, in_progress_count: agg[0].in_progress_count,
+      },
+      pagination: { page: pg, limit: lim, total: cnt[0].n },
+    }
   }
 
   async listPayouts({ vendorId = null, page = 1, limit = 20 } = {}) {

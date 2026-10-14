@@ -1,0 +1,18 @@
+import { call, otpLogin, adminLogin, check, summary, PHONES, sampleImages, vendorIdOf, categoryId } from './lib.mjs'
+const A = await otpLogin(PHONES.vendorA), S = await otpLogin(PHONES.vendorB), adm = await adminLogin()
+const images = await sampleImages(); const cat = await categoryId(); const vS = vendorIdOf(S.token); const tag = 'QA-FL ' + Date.now().toString(36)
+const mk = (n, brand, condition, extra={}) => call(adm.token,'POST','/admin/listings',{ name:`${tag} ${n}`, categoryId:cat, condition, stock:10, price:1000, mrp:1200, images, ownerVendorId:vS, brand, sellB2c:false, sellB2b:true, wholesalePrice:700, moq:2, conditionNotes:'QA', ...extra })
+await mk('A1','QAApple','NEW'); await mk('A2','QAApple','REFURBISHED'); await mk('S1','QASamsung','NEW'); await mk('S2','QASamsung','NEW')
+const list = async (q='') => (await call(A.token,'GET',`/vendor/b2b/wholesale?search=${encodeURIComponent(tag)}${q}`)).json
+let j = await list(); console.log('   facets', JSON.stringify(j.facets))
+check('4 listings, facets list both brands with counts', j.data.length===4 && j.facets.brands.find(b=>b.value==='QASamsung')?.count===2 && j.facets.brands.find(b=>b.value==='QAApple')?.count===2, JSON.stringify(j.facets))
+check('condition facet counts NEW=3 REFURBISHED=1', j.facets.conditions.find(c=>c.value==='NEW')?.count===3 && j.facets.conditions.find(c=>c.value==='REFURBISHED')?.count===1)
+j = await list('&brand=QAApple'); check('brand filter', j.data.length===2 && j.data.every(x=>x.name.includes('A')) && j.pagination.total===2, j.pagination.total)
+check('facets keep all brands while one is selected', j.facets.brands.length===2)
+j = await list('&condition=REFURBISHED'); check('condition filter', j.data.length===1 && j.data[0].condition==='REFURBISHED')
+j = await list('&brand=qasamsung&condition=NEW'); check('brand (case-insensitive) + condition', j.data.length===2)
+j = await list('&brand=QAApple&condition=NEW'); check('combined filter narrows', j.data.length===1)
+j = await list('&brand=NoSuchBrand'); check('unknown brand → empty, facets intact', j.data.length===0 && j.facets.brands.length===2)
+j = await list('&condition=BOGUS'); check('invalid condition ignored (no 5xx)', j.data?.length===4)
+j = await list("&brand=%27%3B%20DROP%20TABLE%20users%3B--"); check('SQL-ish brand harmless', j.data?.length===0)
+process.exit(summary()?1:0)

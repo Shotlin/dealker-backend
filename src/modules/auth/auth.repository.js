@@ -160,7 +160,8 @@ export class AuthRepository {
    * @returns {Promise<Array<{shop_staff_id, shop_id, shop_name, role, permissions}>>}
    */
   /**
-   * Active vendor memberships for a user (vendor app login: vendor-scoped JWT).
+   * Active vendor memberships for a user (vendor app login: vendor-scoped JWT). Vendors still being onboarded get a
+   * token too so they can finish KYC; every other vendor route keeps refusing them (is_active = false).
    */
   async findActiveVendorUsersByUserId(userId) {
     const { rows } = await query(
@@ -170,7 +171,7 @@ export class AuthRepository {
         WHERE vu.user_id = $1
           AND vu.is_active = true
           AND vu.deleted_at IS NULL
-          AND v.is_active = true
+          AND (v.is_active = true OR v.status IN ('PENDING_ONBOARDING', 'KYC_SUBMITTED', 'UNDER_REVIEW', 'CORRECTION_REQUIRED'))
           AND v.deleted_at IS NULL
         ORDER BY vu.created_at`,
       [userId]

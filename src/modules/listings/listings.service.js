@@ -221,6 +221,7 @@ export const listingsService = {
     const problems = []
     this.checkChannels(merged, problems)
     if (USED.includes(cond) && merged.sellB2c && Number(merged.stock) > 1) problems.push('Used items are single-unit listings (quantity 1)')
+    if (merged.mrp != null && Number(merged.price) > Number(merged.mrp)) problems.push('MRP cannot be lower than the selling price')
     if (problems.length) throw err(400, problems.join('. '), 'VALIDATION_ERROR')
     const client = await getClient()
     try {

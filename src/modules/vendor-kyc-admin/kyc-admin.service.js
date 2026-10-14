@@ -1,4 +1,5 @@
 import { query, getClient } from '../../config/database.js'
+import { signedUrl } from '../vendor-kyc-files/vendor-kyc-files.service.js'
 
 const err = (statusCode, message, code = 'KYC_ERROR') => Object.assign(new Error(message), { statusCode, code })
 
@@ -56,7 +57,7 @@ export const kycAdmin = {
     const v = (await query(`SELECT * FROM vendors WHERE id = $1 AND deleted_at IS NULL`, [vendorId])).rows[0]
     if (!v) throw err(404, 'Vendor not found', 'NOT_FOUND')
     const profile = (await query(`SELECT * FROM vendor_profiles WHERE vendor_id = $1`, [vendorId])).rows[0] ?? null
-    const documents = (await query(`SELECT d.*, u.name AS reviewed_by_name FROM vendor_documents d LEFT JOIN users u ON u.id = d.reviewed_by WHERE d.vendor_id = $1 ORDER BY d.created_at`, [vendorId])).rows
+    const documents = (await query(`SELECT d.*, u.name AS reviewed_by_name FROM vendor_documents d LEFT JOIN users u ON u.id = d.reviewed_by WHERE d.vendor_id = $1 ORDER BY d.created_at`, [vendorId])).rows.map((d) => ({ ...d, file_url: signedUrl(d, 45 * 60) || d.file_url }))
     const history = (await query(`SELECT r.*, u.name AS reviewer_name FROM vendor_kyc_reviews r LEFT JOIN users u ON u.id = r.reviewer_id WHERE r.vendor_id = $1 ORDER BY r.created_at DESC`, [vendorId])).rows
     const shops = (await query(`SELECT id, name, city, state, pincode, is_active, commission_rate, seller_rating, total_orders FROM shops WHERE vendor_id = $1 AND deleted_at IS NULL`, [vendorId])).rows
     const stats = (await query(

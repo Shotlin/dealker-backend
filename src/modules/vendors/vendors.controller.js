@@ -5,6 +5,8 @@
  * @module modules/vendors/vendors.controller
  */
 
+import { isPlatformUser } from '../../middlewares/vendor-scope.js'
+
 export class VendorsController {
   /**
    * @param {import('./vendors.service.js').VendorsService} service
@@ -34,7 +36,7 @@ export class VendorsController {
   }
 
   update = async (req, reply) => {
-    const updated = await this.service.updateVendor(req.vendorId, req.body)
+    const updated = await this.service.updateVendor(req.vendorId, req.body, { asVendor: !isPlatformUser(req.user) })
     return reply.status(200).send({ success: true, data: updated })
   }
 
@@ -57,7 +59,7 @@ export class VendorsController {
   }
 
   updateProfile = async (req, reply) => {
-    const updated = await this.service.updateProfile(req.vendorId, req.body)
+    const updated = await this.service.updateProfile(req.vendorId, req.body, { asVendor: !isPlatformUser(req.user) })
     return reply.status(200).send({ success: true, data: updated })
   }
 

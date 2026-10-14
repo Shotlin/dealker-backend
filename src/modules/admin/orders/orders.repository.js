@@ -27,7 +27,13 @@ export class AdminOrdersRepository {
     // shop-scoped staff JWT always carries a concrete value, so this branch
     // is the ONLY thing that actually enforces per-branch order history —
     // previously the dashboard's shop selector filtered nothing server-side.
-    if (shopId) { params.push(shopId); clause += ` AND o.shop_id = $${idx++}` }
+    if (shopId) {
+      // Marketplace parent orders have shop_id NULL (they span vendors): the platform shop's view must still list them,
+      // otherwise the dashboard in store mode showed "No orders found" for every vendor sale.
+      params.push(shopId)
+      clause += ` AND (o.shop_id = $${idx} OR (o.shop_id IS NULL AND o.is_marketplace = TRUE AND EXISTS (SELECT 1 FROM shops ps WHERE ps.id = $${idx} AND ps.is_platform = TRUE)))`
+      idx++
+    }
     if (status) { params.push(status); clause += ` AND o.status = $${idx++}` }
     if (paymentMethod) { params.push(paymentMethod); clause += ` AND o.payment_method = $${idx++}` }
     if (paymentStatus) { params.push(paymentStatus); clause += ` AND o.payment_status = $${idx++}` }

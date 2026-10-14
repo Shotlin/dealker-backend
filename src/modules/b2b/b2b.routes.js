@@ -40,6 +40,14 @@ export async function vendorB2bRoutes(fastify) {
   const actor = (req) => ({ userId: req.userId || req.user.id, vendorId: req.vendorId, label: 'Vendor' })
 
   fastify.get('/requirements', { preHandler: pre }, wrap(async (req) => ({ success: true, ...(await b2b.listForVendor(req.vendorId, req.query || {})) })))
+  // Wholesale shelf: other vendors' B2B listings (browse → buy at the listed price)
+  fastify.get('/wholesale', { preHandler: pre }, wrap(async (req) => ({ success: true, ...(await b2b.wholesaleList(req.vendorId, req.query || {})) })))
+  fastify.get('/wholesale/:id', { preHandler: pre, schema: { params: { type: 'object', properties: { id: uuid }, required: ['id'] } } },
+    wrap(async (req) => ({ success: true, data: await b2b.wholesaleDetail(req.vendorId, req.params.id) })))
+  fastify.post('/wholesale/:id/order', {
+    preHandler: pre,
+    schema: { params: { type: 'object', properties: { id: uuid }, required: ['id'] }, body: { type: 'object', required: ['quantity'], properties: { quantity: { type: 'integer', minimum: 1, maximum: 100000 } }, additionalProperties: false } },
+  }, wrap(async (req, reply) => reply.code(201).send({ success: true, data: await b2b.wholesaleBuy(req.params.id, req.body.quantity, actor(req)) })))
   fastify.get('/demand/summary', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.demandSummary(req.vendorId) })))
   fastify.get('/wallet', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.walletFor(req.vendorId) })))
   fastify.get('/requirements/:id/match', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.matchFor(req.params.id, req.vendorId) })))

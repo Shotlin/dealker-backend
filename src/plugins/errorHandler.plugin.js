@@ -23,6 +23,11 @@ async function errorHandlerPlugin(fastify) {
       })
     }
 
+    // Malformed id in a path/query (e.g. "undefined") reaches Postgres as a bad uuid — that is a client error.
+    if (code === '22P02' || code === '22021') {
+      return reply.code(400).send({ success: false, message: 'Invalid identifier or value', code: 'INVALID_INPUT' })
+    }
+
     // Rate-limit errors — pass through with 429
     if (statusCode === 429 || code === 'FST_RATE_LIMIT_EXCEEDED') {
       return reply.code(429).send({

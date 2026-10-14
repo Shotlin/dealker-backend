@@ -59,7 +59,7 @@ export async function vendorRoutes(fastify) {
     preHandler: [
       fastify.authenticate,
       requirePermission('vendors.view'),
-      requireVendorScope(),
+      requireVendorScope({ allowOnboarding: true }),
     ],
     handler: controller.getById,
   })
@@ -69,7 +69,7 @@ export async function vendorRoutes(fastify) {
     preHandler: [
       fastify.authenticate,
       requirePermission('vendors.update'),
-      requireVendorScope(),
+      requireVendorScope({ allowOnboarding: true }),
     ],
     schema: { body: UpdateVendorSchema },
     handler: controller.update,
@@ -144,7 +144,7 @@ export async function vendorRoutes(fastify) {
     preHandler: [
       fastify.authenticate,
       requirePermission('vendors.update'),
-      requireVendorScope(),
+      requireVendorScope({ allowOnboarding: true }),
     ],
     schema: { body: UpdateVendorProfileSchema },
     handler: controller.updateProfile,

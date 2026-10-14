@@ -9,14 +9,25 @@
  * @module modules/seller-orders/seller-orders.routes
  */
 
-import { requireVendorScope } from '../../middlewares/vendor-scope.js'
+import { requireVendorScope, isPlatformUser } from '../../middlewares/vendor-scope.js'
 import { SellerOrdersService } from './seller-orders.service.js'
 
 const service = new SellerOrdersService()
 
+/**
+ * requireVendorScope() lets any non-vendor user through with vendorId = null,
+ * which the service reads as "platform-wide". Without this guard a plain
+ * customer could list and change every vendor's orders (found in live QA 2026-10-14).
+ */
+const guard = (permission) => async (request, reply) => {
+  if (request.vendorId) return
+  if (isPlatformUser(request.user) && request.permissions?.includes(permission)) return
+  return reply.code(403).send({ success: false, code: 'FORBIDDEN', message: 'Vendor or platform access required' })
+}
+
 export const sellerOrdersRoutes = async function sellerOrderRoutes(fastify) {
   fastify.get('/', {
-    preHandler: [fastify.authenticate, requireVendorScope()],
+    preHandler: [fastify.authenticate, requireVendorScope(), guard('seller_orders.view')],
     handler: async (request) => {
       const { orderId, status, fulfilmentStatus, search, page = 1, limit = 20 } = request.query || {}
       return service.list({
@@ -32,7 +43,7 @@ export const sellerOrdersRoutes = async function sellerOrderRoutes(fastify) {
   })
 
   fastify.get('/:id', {
-    preHandler: [fastify.authenticate, requireVendorScope()],
+    preHandler: [fastify.authenticate, requireVendorScope(), guard('seller_orders.view')],
     handler: async (request, reply) => {
       const row = await service.getById(request.params.id, request.vendorId || null)
       if (!row) return reply.status(404).send({ success: false, message: 'Seller order not found' })
@@ -41,7 +52,7 @@ export const sellerOrdersRoutes = async function sellerOrderRoutes(fastify) {
   })
 
   fastify.post('/:id/status', {
-    preHandler: [fastify.authenticate, requireVendorScope()],
+    preHandler: [fastify.authenticate, requireVendorScope(), guard('seller_orders.manage')],
     handler: async (request, reply) => {
       const { status, reason } = request.body || {}
       try {

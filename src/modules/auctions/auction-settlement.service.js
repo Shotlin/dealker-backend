@@ -151,7 +151,7 @@ async function forfeitRegistration(client, a, reg, { penalty = false } = {}) {
   }
   if (split.vendor > 0) {
     await ledger(client, a, reg, 'FEE_FORFEIT_VENDOR', split.vendor, penalty ? 'Winner default penalty — vendor share' : 'Forfeited fee — vendor share')
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`settle:${a.vendor_id}`])
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`settlement:${a.vendor_id}`])
     const { rows } = await client.query('SELECT COALESCE(SUM(amount),0) AS bal FROM settlement_ledger WHERE vendor_id = $1', [a.vendor_id])
     const amount = fromPaise(split.vendor)
     await client.query(

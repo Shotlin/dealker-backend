@@ -534,6 +534,13 @@ export class OrdersService {
       return { alreadyCancelled: false, paymentConfirmed: true, order }
     }
 
+    if (['OUT_FOR_DELIVERY', 'SHIPPED', 'DELIVERED', 'COMPLETED'].includes(order.status)) {
+      const err = new Error('This order has already been dispatched and can no longer be cancelled')
+      err.statusCode = 409
+      err.code = 'ORDER_NOT_CANCELLABLE'
+      throw err
+    }
+
     if (order.status === 'CANCELLED') {
       // Idempotent — a duplicate cancel call (double tap, retry) is a
       // harmless no-op rather than an error.
@@ -546,6 +553,14 @@ export class OrdersService {
       await client.query(
         `UPDATE orders SET status = 'CANCELLED', payment_status = 'FAILED', updated_at = NOW() WHERE id = $1`,
         [orderId]
+      )
+      // The vendors' slices must follow the parent, otherwise they keep seeing (and could ship) a dead order.
+      await client.query(
+        `UPDATE seller_orders
+            SET status = 'CANCELLED', fulfilment_status = 'CANCELLED', cancelled_at = NOW(),
+                cancellation_reason = COALESCE($2, cancellation_reason), updated_at = NOW()
+          WHERE order_id = $1 AND status NOT IN ('CANCELLED', 'DELIVERED', 'CLOSED', 'RETURNED')`,
+        [orderId, reason || 'Cancelled by customer']
       )
       const items = await this.repository.getOrderItems(orderId)
       await this.shopProductsRepo.restoreStockForCancelledOrder(client, {

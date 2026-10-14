@@ -198,6 +198,9 @@ export const buildApp = async () => {
     prefix: "/api/v1/vendors",
   });
 
+  await app.register(async (i) => i.register((await import("./modules/vendor-kyc-files/vendor-kyc-files.routes.js")).vendorKycFilesRoutes), {
+    prefix: "/api/v1/vendor-kyc",
+  });
   await app.register(import("./modules/vendors/vendor-kyc.routes.js"), {
     prefix: "/api/v1/vendor-kyc",
   });

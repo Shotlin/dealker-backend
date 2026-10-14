@@ -1,0 +1,13 @@
+import { call, otpLogin, check, summary, PHONES } from './lib.mjs'
+const A = await otpLogin(PHONES.vendorA), c = await otpLogin(PHONES.customer)
+let r = await call(A.token,'GET','/settlements/payouts'); check('vendor lists own payouts', r.status===200 && r.json.data.length>0, JSON.stringify(r.json).slice(0,300)); console.log('   ', JSON.stringify(r.json.data[0]), JSON.stringify(r.json.summary), JSON.stringify(r.json.pagination))
+check('only own vendor rows (PO-000013-15 are TechNest)', r.json.data.every(p=>['PO-000013','PO-000014','PO-000015'].includes(p.payout_number)), r.json.data.map(p=>p.payout_number).join())
+check('no internal fields leaked', !JSON.stringify(r.json).match(/notes|created_by|vendor_id|vendor_name/))
+check('summary matches rows', Math.abs(r.json.summary.paid - r.json.data.filter(p=>p.status==='PAID').reduce((a,p)=>a+p.amount,0))<0.01)
+r = await call(A.token,'GET','/settlements/payouts?status=PAID'); check('status filter', r.json.data.length>0 && r.json.data.every(p=>p.status==='PAID'))
+r = await call(A.token,'GET','/settlements/payouts?status=BOGUS'); check('unknown status ignored (no 5xx)', r.status===200)
+r = await call(A.token,'GET','/settlements/payouts?page=999&limit=500'); check('big page/limit safe', r.status===200 && r.json.data.length===0 && r.json.pagination.limit===100)
+r = await call(A.token,'GET','/settlements/payouts?limit=-5&page=abc'); check('junk paging safe', r.status===200)
+r = await call(c.token,'GET','/settlements/payouts'); check('customer blocked', r.status===403, r.status)
+r = await call(null,'GET','/settlements/payouts'); check('guest blocked', r.status===401)
+process.exit(summary()?1:0)

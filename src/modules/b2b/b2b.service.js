@@ -265,6 +265,103 @@ export const b2b = {
     } catch (x) { await client.query('ROLLBACK').catch(() => {}); throw x } finally { client.release() }
   },
 
+  // ── Wholesale shelf: other vendors' B2B listings, bought directly ────────
+  /** Browse verified vendors' wholesale listings (never the caller's own). */
+  async wholesaleList(vendorId, { search, brand, condition, sort = 'newest', page = 1, limit = 20 } = {}) {
+    const params = [vendorId, SELLER_ELIGIBLE]
+    const where = [`sp.sell_b2b = TRUE`, `sp.wholesale_price > 0`, `sp.deleted_at IS NULL`, `p.deleted_at IS NULL`, `sp.approval_status = 'APPROVED'`,
+      `sp.listing_status = 'ACTIVE'`, `sp.stock_quantity >= GREATEST(sp.min_order_qty, 1)`, `p.owner_vendor_id IS NOT NULL`, `p.owner_vendor_id <> $1`, `v.status = ANY($2)`, `v.is_active = TRUE`]
+    const p_ = (x) => { params.push(x); return `$${params.length}` }
+    if (search) { const s = p_(`%${String(search).slice(0, 80)}%`); where.push(`(p.name ILIKE ${s} OR p.brand ILIKE ${s})`) }
+    // Facets (brands / conditions on offer) are counted before the brand + condition filters, so the pickers keep every option.
+    const facetWhere = where.join(' AND '); const facetParams = [...params]
+    if (brand) where.push(`lower(p.brand) = lower(${p_(String(brand).slice(0, 60))})`)
+    if (condition && COND.includes(condition)) where.push(`p.condition = ${p_(condition)}`)
+    const order = { price_low: 'sp.wholesale_price ASC', price_high: 'sp.wholesale_price DESC', stock: 'sp.stock_quantity DESC' }[sort] || 'sp.created_at DESC'
+    const lim = Math.min(50, Math.max(1, Number(limit) || 20)); const off = (Math.max(1, Number(page) || 1) - 1) * lim
+    const base = `FROM shop_products sp JOIN products p ON p.id = sp.product_id JOIN vendors v ON v.id = p.owner_vendor_id
+                  LEFT JOIN vendor_profiles vp ON vp.vendor_id = v.id WHERE ${where.join(' AND ')}`
+    const facetBase = `FROM shop_products sp JOIN products p ON p.id = sp.product_id JOIN vendors v ON v.id = p.owner_vendor_id WHERE ${facetWhere}`
+    const [{ rows }, { rows: cnt }, { rows: fb }, { rows: fc }] = await Promise.all([
+      query(`SELECT sp.id, p.name, p.brand, p.condition, p.thumbnail_url, p.specifications->>'storage' AS storage, p.battery_health,
+                    sp.wholesale_price, sp.min_order_qty AS moq, sp.stock_quantity AS stock, sp.b2b_discount_pct, sp.price AS retail_price,
+                    v.id AS seller_id, v.name AS seller_name, vp.city AS seller_city, v.avg_rating AS seller_rating
+               ${base} ORDER BY ${order} LIMIT ${lim} OFFSET ${off}`, params),
+      query(`SELECT COUNT(*)::int AS n ${base}`, params),
+      query(`SELECT p.brand AS value, COUNT(*)::int AS n ${facetBase} AND p.brand IS NOT NULL AND p.brand <> '' GROUP BY p.brand ORDER BY n DESC, p.brand LIMIT 40`, facetParams),
+      query(`SELECT p.condition AS value, COUNT(*)::int AS n ${facetBase} AND p.condition IS NOT NULL GROUP BY p.condition ORDER BY n DESC`, facetParams),
+    ])
+    return {
+      facets: { brands: fb.map((r) => ({ value: r.value, count: r.n })), conditions: fc.map((r) => ({ value: r.value, count: r.n })) },
+      data: rows.map((r) => ({
+        id: r.id, name: r.name, brand: r.brand, condition: r.condition, thumbnail_url: r.thumbnail_url, storage: r.storage,
+        battery_health: r.battery_health != null ? Number(r.battery_health) : null, wholesale_price: Number(r.wholesale_price),
+        retail_price: r.retail_price != null ? Number(r.retail_price) : null, moq: Number(r.moq || 1), stock: Number(r.stock),
+        discount_pct: r.b2b_discount_pct != null ? Number(r.b2b_discount_pct) : null,
+        seller: { id: r.seller_id, name: r.seller_name, city: r.seller_city || null, rating: r.seller_rating != null ? Number(r.seller_rating) : null },
+      })),
+      pagination: { page: Number(page) || 1, limit: lim, total: cnt[0].n },
+    }
+  },
+
+  async wholesaleDetail(vendorId, listingId) {
+    const { rows } = await query(
+      `SELECT sp.id, p.name, p.brand, p.condition, p.condition_notes, p.description, p.thumbnail_url, p.images, p.specifications, p.warranty_info, p.battery_health,
+              sp.wholesale_price, sp.min_order_qty AS moq, sp.stock_quantity AS stock, sp.b2b_discount_pct, sp.b2b_notes, sp.handling_time_days,
+              v.id AS seller_id, v.name AS seller_name, vp.city AS seller_city, vp.state AS seller_state, v.avg_rating AS seller_rating, v.review_count AS seller_reviews
+         FROM shop_products sp JOIN products p ON p.id = sp.product_id JOIN vendors v ON v.id = p.owner_vendor_id LEFT JOIN vendor_profiles vp ON vp.vendor_id = v.id
+        WHERE sp.id = $1 AND sp.sell_b2b = TRUE AND sp.wholesale_price > 0 AND sp.deleted_at IS NULL AND p.deleted_at IS NULL AND sp.approval_status = 'APPROVED'
+          AND sp.listing_status = 'ACTIVE' AND p.owner_vendor_id IS NOT NULL AND p.owner_vendor_id <> $2 AND v.status = ANY($3)`, [listingId, vendorId, SELLER_ELIGIBLE])
+    const r = rows[0]
+    if (!r) throw err(404, 'This listing is not available', 'NOT_FOUND')
+    return {
+      id: r.id, name: r.name, brand: r.brand, condition: r.condition, condition_notes: r.condition_notes, description: r.description, thumbnail_url: r.thumbnail_url,
+      images: Array.isArray(r.images) ? r.images : [], specifications: r.specifications || {}, warranty_info: r.warranty_info, battery_health: r.battery_health != null ? Number(r.battery_health) : null,
+      wholesale_price: Number(r.wholesale_price), moq: Number(r.moq || 1), stock: Number(r.stock), discount_pct: r.b2b_discount_pct != null ? Number(r.b2b_discount_pct) : null,
+      notes: r.b2b_notes, handling_days: r.handling_time_days,
+      seller: { id: r.seller_id, name: r.seller_name, city: r.seller_city, state: r.seller_state, rating: r.seller_rating != null ? Number(r.seller_rating) : null, reviews: Number(r.seller_reviews || 0) },
+    }
+  },
+
+  /**
+   * Buy a wholesale listing at its listed price. Runs the normal demand flow privately (one requirement, one quote at the
+   * listed price, awarded at once) so escrow, dispatch, receipt, disputes and commission all work unchanged. The buyer then
+   * pays from the Dealker wallet via `/requirements/:id/pay`. Nothing is broadcast to other vendors.
+   */
+  async wholesaleBuy(listingId, quantity, actor) {
+    const qty = Number(quantity)
+    if (!Number.isInteger(qty) || qty < 1) throw err(400, 'Enter a whole number of units', 'VALIDATION_ERROR')
+    const buyer = (await query(`SELECT status FROM vendors WHERE id=$1`, [actor.vendorId])).rows[0]
+    if (!buyer || !SELLER_ELIGIBLE.includes(buyer.status)) throw err(403, 'Your vendor account must be verified to buy', 'VENDOR_NOT_ELIGIBLE')
+    const l = await this.wholesaleDetail(actor.vendorId, listingId)
+    if (qty < l.moq) throw err(400, `Minimum order is ${l.moq} units`, 'BELOW_MOQ')
+    if (qty > l.stock) throw err(409, `Only ${l.stock} units are in stock`, 'OUT_OF_STOCK')
+    const client = await getClient()
+    let reqId; let quoteId
+    try {
+      await client.query('BEGIN')
+      const n = (await client.query(`SELECT nextval('b2b_requirement_seq') n`)).rows[0].n
+      const name = l.name
+      const { rows } = await client.query(
+        `INSERT INTO b2b_requirements (requirement_number, buyer_vendor_id, posted_by_type, created_by, title, product_name, brand, condition_pref, quantity_needed, target_price,
+           description, response_deadline, model_key, storage, display_pref, fulfilment_pref, is_urgent)
+         VALUES ($1,$2,'VENDOR',$3,$4,$5,$6,'ANY',$7,$8,$9, NOW() + INTERVAL '1 hour', $10, $11, 'ANY','ANY', FALSE) RETURNING id`,
+        [`B2B-${n}`, actor.vendorId, actor.userId ?? null, `${qty} × ${name} (wholesale shelf)`, name, l.brand || null, qty, l.wholesale_price,
+          `Bought directly from ${l.seller.name}'s wholesale listing`, modelKey(name, l.brand), parseStorage(name)])
+      reqId = rows[0].id
+      const q = await client.query(
+        `INSERT INTO b2b_quotes (requirement_id, seller_vendor_id, quantity_offered, unit_price, condition, delivery_days, note, photos, listing_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'[]'::jsonb,$8) RETURNING id`,
+        [reqId, l.seller.id, qty, l.wholesale_price, l.condition || 'NEW', l.handling_days ?? 3, 'Listed wholesale price', listingId])
+      quoteId = q.rows[0].id
+      await event(client, reqId, null, 'POSTED', actor, `Wholesale shelf: ${qty} × ${name}`)
+      await client.query('COMMIT')
+    } catch (x) { await client.query('ROLLBACK').catch(() => {}); throw x } finally { client.release() }
+    const orders = await this.award(reqId, [{ quoteId, quantity: qty }], actor)
+    const o = orders[0]
+    return { requirement_id: reqId, order_id: o.id, order_number: o.order_number, quantity: qty, unit_price: l.wholesale_price, total: Number(o.subtotal), seller: l.seller.name }
+  },
+
   /**
    * Vendor lists. scope: open (others' demand, default) · new (unseen) · matched (I hold the stock) ·
    * mine (I posted) · quoted (my offers; `tab` = active | pending | closed).

@@ -31,7 +31,7 @@ export async function vendorKycRoutes(fastify) {
     preHandler: [
       fastify.authenticate,
       requirePermission('vendors.update'),
-      requireVendorScope(),
+      requireVendorScope({ allowOnboarding: true }),
     ],
     schema: { body: SubmitKycSchema },
     handler: controller.submitKyc,
@@ -52,7 +52,7 @@ export async function vendorKycRoutes(fastify) {
     preHandler: [
       fastify.authenticate,
       requirePermission('vendor_documents.view'),
-      requireVendorScope(),
+      requireVendorScope({ allowOnboarding: true }),
     ],
     handler: controller.getOnboardingStatus,
   })

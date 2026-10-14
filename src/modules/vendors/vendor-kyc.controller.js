@@ -5,6 +5,8 @@
  * @module modules/vendors/vendor-kyc.controller
  */
 
+import { isPlatformUser } from '../../middlewares/vendor-scope.js'
+
 export class VendorKycController {
   /**
    * @param {import('./vendor-kyc.service.js').VendorKycService} service
@@ -23,7 +25,7 @@ export class VendorKycController {
   // `vendor_documents.verify`), so it's meant to target an arbitrary vendor.
 
   submitKyc = async (req, reply) => {
-    const result = await this.service.submitKyc(req.vendorId, req.body)
+    const result = await this.service.submitKyc(req.vendorId, req.body, { asVendor: !isPlatformUser(req.user) })
     return reply.status(200).send({ success: true, data: result })
   }
 

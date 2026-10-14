@@ -1,4 +1,5 @@
 import { CartController } from './cart.controller.js'
+import { wholesaleGuard } from '../../middlewares/wholesale-guard.js'
 import { CartService } from './cart.service.js'
 import { CartRepository } from './cart.repository.js'
 import { BillSummaryService } from './bill-summary.service.js'
@@ -37,6 +38,7 @@ export default async function cartRoutes(fastify) {
 
   // All cart routes require auth
   fastify.addHook('preHandler', fastify.authenticate)
+  fastify.addHook('preHandler', wholesaleGuard)
 
   // GET / — Get current cart
   fastify.get('/', {
