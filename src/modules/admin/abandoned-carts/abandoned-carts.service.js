@@ -26,9 +26,9 @@ function cooldownRemainingMs(episode, now = Date.now()) {
 }
 
 export class AdminAbandonedCartsService {
-  async list({ page = 1, limit = 20, search, status, minValue, maxValue, sortBy, sortOrder }) {
+  async list({ page = 1, limit = 20, search, status, channel, minValue, maxValue, sortBy, sortOrder }) {
     const offset = (page - 1) * limit
-    return repo.findAll({ offset, limit, search, status, minValue, maxValue, sortBy, sortOrder })
+    return repo.findAll({ offset, limit, search, status, channel, minValue, maxValue, sortBy, sortOrder })
   }
 
   async getSummary() {

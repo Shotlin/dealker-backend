@@ -24,13 +24,14 @@ const CARD = `
          p.thumbnail_url, COALESCE(jsonb_array_length(p.images), 0) AS image_count,
          COALESCE(sp.sale_price, sp.price) AS price, sp.mrp, sp.stock_quantity AS stock,
          sp.approval_status, sp.listing_status, sp.rejection_reason, sp.sold_count, sp.created_at, p.sku,
-         sp.qc_status, sp.qc_score, sp.merch_section, sp.sell_b2c, sp.sell_b2b`
+         sp.qc_status, sp.qc_score, sp.merch_section, sp.sell_b2c, sp.sell_b2b, sp.wholesale_price, sp.min_order_qty`
 
 function toCard(r) {
   return {
     ...r,
     price: Number(r.price), mrp: r.mrp != null ? Number(r.mrp) : null, image_count: Number(r.image_count),
     stock: Number(r.stock), sold_count: Number(r.sold_count || 0),
+    wholesale_price: r.wholesale_price != null ? Number(r.wholesale_price) : null, min_order_qty: Number(r.min_order_qty || 1),
   }
 }
 
@@ -98,32 +99,61 @@ export const listingsService = {
               p.name, p.brand, p.description, p.category_id, c.name AS category_name, p.images, p.thumbnail_url, p.condition, p.condition_notes,
               p.usage_duration, p.warranty_info, p.accessories_included, p.battery_health, p.serial_number, p.imei, p.has_invoice, p.hsn_code,
               sp.qc_status, sp.qc_mode, sp.qc_score, sp.qc_notes, sp.qc_checked_at,
+              sp.sell_b2c, sp.sell_b2b, sp.wholesale_price, sp.min_order_qty, sp.b2b_discount_pct, sp.b2b_notes, sp.vendor_qc, p.video_url,
               p.gst_rate, p.specifications, p.return_policy_days, p.owner_type, p.owner_vendor_id AS vendor_id, COALESCE(v.name,'Dealker') AS owner_name
          ${BASE} AND sp.id = $1 ${scope.vendorId ? 'AND p.owner_vendor_id = $2' : ''}`, scope.vendorId ? [id, scope.vendorId] : [id])
     if (!rows[0]) throw err(404, 'Listing not found', 'NOT_FOUND')
     const r = rows[0]
     return { ...r, selling_price: Number(r.selling_price), mrp: r.mrp != null ? Number(r.mrp) : null,
+      wholesale_price: r.wholesale_price != null ? Number(r.wholesale_price) : null, min_order_qty: Number(r.min_order_qty || 1),
+      b2b_discount_pct: r.b2b_discount_pct != null ? Number(r.b2b_discount_pct) : null,
       images: r.images || [], specifications: r.specifications || {} }
+  },
+
+  /** Channel rules, checked against the merged (stored + incoming) listing so partial edits can't break them. */
+  checkChannels(m, e) {
+    const b2c = m.sellB2c !== false
+    const b2b = m.sellB2b === true
+    if (!b2c && !b2b) { e.push('Choose at least one sales channel (B2B or B2C)'); return }
+    if (b2c && !(Number(m.price) > 0)) e.push('Selling price is required')
+    if (b2b) {
+      if (!(Number(m.wholesalePrice) > 0)) e.push('Wholesale price is required for B2B')
+      const moq = Number(m.moq ?? 1)
+      if (!Number.isInteger(moq) || moq < 1) e.push('Minimum order quantity must be at least 1')
+      else if (Number(m.stock) > 0 && moq > Number(m.stock)) e.push('Minimum order quantity cannot exceed the stock')
+      if (b2c && Number(m.wholesalePrice) > Number(m.price)) e.push('Wholesale price cannot be higher than the B2C selling price')
+      if (m.mrp != null && Number(m.wholesalePrice) > Number(m.mrp)) e.push('Wholesale price cannot be higher than the MRP')
+    }
   },
 
   validate(input, { partial = false } = {}) {
     const e = []
+    const b2c = input.sellB2c !== false
     const need = (k, label) => { if (!partial && (input[k] === undefined || input[k] === null || input[k] === '')) e.push(`${label} is required`) }
-    need('name', 'Title'); need('categoryId', 'Category'); need('condition', 'Condition'); need('price', 'Price'); need('stock', 'Quantity')
+    need('name', 'Title'); need('categoryId', 'Category'); need('condition', 'Condition'); need('stock', 'Quantity')
     if (input.condition !== undefined && !CONDITIONS.includes(input.condition)) e.push('Invalid condition')
     if (input.images !== undefined && (!Array.isArray(input.images) || input.images.length < 3)) e.push('At least 3 photos are required')
     if (!partial && !input.images) e.push('At least 3 photos are required')
     if (input.images && input.images.length > 8) e.push('A maximum of 8 photos is allowed')
-    if (input.price !== undefined && !(Number(input.price) > 0)) e.push('Price must be greater than 0')
-    if (input.mrp !== undefined && input.mrp !== null && Number(input.mrp) < Number(input.price)) e.push('MRP cannot be lower than the selling price')
+    if (input.price !== undefined && input.price !== null && !(Number(input.price) > 0)) e.push('Price must be greater than 0')
+    if (input.mrp !== undefined && input.mrp !== null && input.price != null && Number(input.mrp) < Number(input.price)) e.push('MRP cannot be lower than the selling price')
     const cond = input.condition
     if (cond && USED.includes(cond) && !partial && !String(input.conditionNotes || '').trim()) e.push('Describe the condition (scratches, usage) for used items')
-    if (cond && USED.includes(cond) && Number(input.stock) > 1) e.push('Used items are single-unit listings (quantity 1)')
+    // Used phones sold to customers are unique single units; a B2B-only lot may hold several graded units.
+    if (cond && USED.includes(cond) && b2c && Number(input.stock) > 1) e.push('Used items are single-unit listings (quantity 1)')
+    if (!partial) this.checkChannels(input, e)
+    else if (input.sellB2c === false && input.sellB2b === false) e.push('Choose at least one sales channel (B2B or B2C)')
     if (e.length) throw err(400, e.join('. '), 'VALIDATION_ERROR')
   },
 
   async create(input, scope) {
     this.validate(input)
+    const b2c = input.sellB2c !== false
+    const b2b = input.sellB2b === true
+    // A B2B-only listing is stored with its wholesale price as the base price.
+    const price = b2c ? Number(input.price) : Number(input.wholesalePrice)
+    const mrp = input.mrp ?? price
+    const singleUnit = USED.includes(input.condition) && b2c
     const client = await getClient()
     try {
       await client.query('BEGIN')
@@ -149,20 +179,24 @@ export const listingsService = {
            hsn_code, gst_rate, specifications, return_policy_days, owner_type, owner_vendor_id, condition, condition_notes, usage_duration, warranty_info,
            accessories_included, battery_health, serial_number, has_invoice, max_order_qty, imei)
          VALUES ($1,$2,$3,$4,$5,$6,$7,'pc',$8,$9,true,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) RETURNING id`,
-        [input.name.trim(), `${slugify(input.name)}-${Math.random().toString(36).slice(2, 7)}`, input.description || null, input.mrp ?? input.price, input.price,
+        [input.name.trim(), `${slugify(input.name)}-${Math.random().toString(36).slice(2, 7)}`, input.description || null, mrp, price,
           input.categoryId, input.stock, input.images[0], JSON.stringify(input.images), input.sku || null, input.brand || null,
           input.hsnCode || null, input.gstRate ?? null, JSON.stringify(input.specifications || {}), input.returnPolicyDays ?? 7, ownerType, vendorId,
           input.condition, input.conditionNotes || null, input.usageDuration || null, input.warrantyInfo || null, input.accessoriesIncluded || null,
-          input.batteryHealth ?? null, input.serialNumber || null, Boolean(input.hasInvoice), USED.includes(input.condition) ? 1 : 10,
+          input.batteryHealth ?? null, input.serialNumber || null, Boolean(input.hasInvoice), singleUnit ? 1 : 10,
           input.imei ? String(input.imei).replace(/[\s-]/g, '') : null])).rows[0].id
+      if (input.videoUrl) await client.query(`UPDATE products SET video_url = $2 WHERE id = $1`, [pid, input.videoUrl])
       const spId = (await client.query(
         `INSERT INTO shop_products (shop_id, product_id, price, sale_price, mrp, stock_quantity, low_stock_threshold, max_order_qty, is_available, approval_status,
-           approved_at, approved_by, seller_sku, min_order_qty, handling_time_days, weight_grams, cod_eligible, nationwide_shipping_enabled, local_delivery_enabled, listing_status)
-         VALUES ($1,$2,$3,$3,$4,$5,2,$6,$7,$8,$9,$10,$11,1,$12,$13,$14,$15,$16,$17) RETURNING id`,
-        [shopId, pid, input.price, input.mrp ?? input.price, input.stock, USED.includes(input.condition) ? 1 : 10, Number(input.stock) > 0, approval,
+           approved_at, approved_by, seller_sku, min_order_qty, handling_time_days, weight_grams, cod_eligible, nationwide_shipping_enabled, local_delivery_enabled, listing_status,
+           sell_b2c, sell_b2b, wholesale_price, b2b_discount_pct, b2b_notes, vendor_qc)
+         VALUES ($1,$2,$3,$3,$4,$5,2,$6,$7,$8,$9,$10,$11,$18,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24) RETURNING id`,
+        [shopId, pid, price, mrp, input.stock, singleUnit ? 1 : 10, Number(input.stock) > 0, approval,
           approval === 'APPROVED' ? new Date() : null, approval === 'APPROVED' ? scope.actorId : null, input.sku || null, input.handlingTimeDays ?? 2,
           input.weightGrams ?? null, input.codEligible ?? true, input.nationwide ?? true, input.localDelivery ?? true,
-          Number(input.stock) > 0 ? 'ACTIVE' : 'OUT_OF_STOCK'])).rows[0].id
+          Number(input.stock) > 0 ? 'ACTIVE' : 'OUT_OF_STOCK',
+          b2b ? Number(input.moq ?? 1) : 1, b2c, b2b, b2b ? Number(input.wholesalePrice) : null, b2b ? (input.b2bDiscountPct ?? null) : null,
+          b2b ? (input.b2bNotes || null) : null, input.vendorQc ? JSON.stringify(input.vendorQc) : null])).rows[0].id
       await client.query('COMMIT')
       await qc.autoIfEnabled(spId)
       return this.detail(spId, { vendorId: null })
@@ -178,7 +212,16 @@ export const listingsService = {
     const contentKeys = ['name', 'description', 'images', 'condition', 'conditionNotes', 'usageDuration', 'warrantyInfo', 'accessoriesIncluded', 'batteryHealth', 'categoryId', 'brand', 'serialNumber', 'imei']
     const contentChanged = contentKeys.some((k) => input[k] !== undefined)
     const cond = input.condition ?? cur.condition
-    if (USED.includes(cond) && Number(input.stock ?? cur.stock_quantity) > 1) throw err(400, 'Used items are single-unit listings (quantity 1)', 'VALIDATION_ERROR')
+    const merged = {
+      sellB2c: input.sellB2c ?? cur.sell_b2c, sellB2b: input.sellB2b ?? cur.sell_b2b,
+      price: input.price ?? cur.selling_price, mrp: input.mrp !== undefined ? input.mrp : cur.mrp,
+      wholesalePrice: input.wholesalePrice !== undefined ? input.wholesalePrice : cur.wholesale_price,
+      moq: input.moq ?? cur.min_order_qty, stock: input.stock ?? cur.stock_quantity,
+    }
+    const problems = []
+    this.checkChannels(merged, problems)
+    if (USED.includes(cond) && merged.sellB2c && Number(merged.stock) > 1) problems.push('Used items are single-unit listings (quantity 1)')
+    if (problems.length) throw err(400, problems.join('. '), 'VALIDATION_ERROR')
     const client = await getClient()
     try {
       await client.query('BEGIN')
@@ -196,12 +239,20 @@ export const listingsService = {
       if (input.price !== undefined) { set('sale_price', input.price); if (input.mrp === undefined && cur.mrp == null) set('price', input.price) }
       if (input.mrp !== undefined) set('price', input.mrp)
       if (input.stock !== undefined) set('stock_quantity', input.stock)
+      if (input.videoUrl !== undefined) set('video_url', input.videoUrl || null)
       if (sets.length) await client.query(`UPDATE products SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1`, vals)
 
       const ss = []; const sv = [id]
       const sset = (col, v) => { sv.push(v); ss.push(`${col} = $${sv.length}`) }
       if (input.price !== undefined) { sset('price', input.price); sset('sale_price', input.price) }
       if (input.mrp !== undefined) sset('mrp', input.mrp)
+      if (input.sellB2c !== undefined) sset('sell_b2c', input.sellB2c)
+      if (input.sellB2b !== undefined) sset('sell_b2b', input.sellB2b)
+      if (input.wholesalePrice !== undefined) sset('wholesale_price', input.wholesalePrice)
+      if (input.moq !== undefined) sset('min_order_qty', input.moq)
+      if (input.b2bDiscountPct !== undefined) sset('b2b_discount_pct', input.b2bDiscountPct)
+      if (input.b2bNotes !== undefined) sset('b2b_notes', input.b2bNotes || null)
+      if (input.vendorQc !== undefined) sset('vendor_qc', input.vendorQc ? JSON.stringify(input.vendorQc) : null)
       if (input.stock !== undefined) {
         sset('stock_quantity', input.stock); sset('is_available', Number(input.stock) > 0)
         if (cur.listing_status !== 'PAUSED') sset('listing_status', Number(input.stock) > 0 ? 'ACTIVE' : 'OUT_OF_STOCK')

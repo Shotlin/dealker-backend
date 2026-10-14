@@ -9,7 +9,7 @@ import { query } from '../../../config/database.js'
  * record a link row against an already-existing episode.
  */
 export class AdminAbandonedCartsRepository {
-  async findAll({ offset, limit, search, status = 'OPEN', minValue, maxValue, sortBy = 'abandoned_at', sortOrder = 'DESC' }) {
+  async findAll({ offset, limit, search, status = 'OPEN', channel = 'ALL', minValue, maxValue, sortBy = 'abandoned_at', sortOrder = 'DESC' }) {
     const params = []
     const clauses = []
     let idx = 1
@@ -17,6 +17,11 @@ export class AdminAbandonedCartsRepository {
     if (status && status !== 'ALL') {
       clauses.push(`ac.status = $${idx}`)
       params.push(status)
+      idx++
+    }
+    if (channel === 'B2B' || channel === 'B2C') {
+      clauses.push(`ac.price_mode = $${idx}`)
+      params.push(channel === 'B2B' ? 'wholesale' : 'retail')
       idx++
     }
     if (search) {
@@ -48,8 +53,12 @@ export class AdminAbandonedCartsRepository {
     const { rows } = await query(
       `SELECT ac.id, ac.user_id, ac.status, ac.abandoned_at, ac.item_count, ac.total_quantity,
               ac.cart_value, ac.priority_score, ac.reminder_count, ac.last_reminder_sent_at,
-              ac.recovered_at, ac.converted_at,
-              u.name AS user_name, u.phone AS user_phone, u.email AS user_email
+              ac.recovered_at, ac.converted_at, ac.price_mode,
+              u.name AS user_name, u.phone AS user_phone, u.email AS user_email,
+              COALESCE((SELECT array_agg(DISTINCT v.name) FROM abandoned_cart_items ci
+                          JOIN shops s ON s.id = ci.shop_id JOIN vendors v ON v.id = s.vendor_id
+                         WHERE ci.abandoned_cart_id = ac.id), '{}') AS vendor_names,
+              (SELECT COUNT(*)::int FROM abandoned_cart_vendor_reminders r WHERE r.abandoned_cart_id = ac.id) AS vendor_reminder_count
        FROM abandoned_carts ac
        JOIN users u ON u.id = ac.user_id
        ${where}
@@ -86,13 +95,14 @@ export class AdminAbandonedCartsRepository {
     )
     if (!episode) return null
 
-    const [{ rows: items }, { rows: events }, { rows: notifications }, { rows: coupons }, history, customer] = await Promise.all([
+    const [{ rows: items }, { rows: events }, { rows: notifications }, { rows: coupons }, history, customer, { rows: vendorReminders }] = await Promise.all([
       query(
-        `SELECT ci.product_id, ci.shop_id, s.name AS shop_name, ci.product_name,
+        `SELECT ci.product_id, ci.shop_id, s.name AS shop_name, v.name AS vendor_name, ci.product_name,
                 ci.product_thumbnail_url, ci.product_unit,
                 ci.quantity, ci.unit_price, ci.list_price, ci.line_total
          FROM abandoned_cart_items ci
          LEFT JOIN shops s ON s.id = ci.shop_id
+         LEFT JOIN vendors v ON v.id = s.vendor_id
          WHERE ci.abandoned_cart_id = $1 ORDER BY ci.created_at`,
         [id]
       ),
@@ -118,9 +128,17 @@ export class AdminAbandonedCartsRepository {
       ),
       this._getHistory(episode.user_id, id),
       this._getCustomerStats(episode.user_id),
+      query(
+        `SELECT r.id, r.vendor_id, v.name AS vendor_name, r.template_key, r.product_ids, r.created_at, n.title, n.body
+           FROM abandoned_cart_vendor_reminders r
+           JOIN vendors v ON v.id = r.vendor_id
+           LEFT JOIN notifications n ON n.id = r.notification_id
+          WHERE r.abandoned_cart_id = $1 ORDER BY r.created_at DESC`,
+        [id]
+      ),
     ])
 
-    return this._formatDetail(episode, items, events, notifications, coupons, history, customer)
+    return this._formatDetail(episode, items, events, notifications, coupons, history, customer, vendorReminders)
   }
 
   /** The customer's OTHER abandonment episodes — shows whether this is a habit. */
@@ -181,7 +199,9 @@ export class AdminAbandonedCartsRepository {
   async getSummary() {
     const { rows: [openStats] } = await query(
       `SELECT COUNT(*)::int AS open_count, COALESCE(SUM(cart_value), 0) AS open_value,
-              COALESCE(AVG(cart_value), 0) AS avg_cart_value
+              COALESCE(AVG(cart_value), 0) AS avg_cart_value,
+              COUNT(*) FILTER (WHERE price_mode = 'wholesale')::int AS open_b2b,
+              COUNT(*) FILTER (WHERE price_mode = 'retail')::int AS open_b2c
        FROM abandoned_carts WHERE status = 'OPEN'`
     )
     const { rows: [todayStats] } = await query(
@@ -210,6 +230,8 @@ export class AdminAbandonedCartsRepository {
 
     return {
       openCount: openStats.open_count,
+      openB2b: openStats.open_b2b,
+      openB2c: openStats.open_b2c,
       openValue: parseFloat(openStats.open_value),
       avgCartValue: parseFloat(openStats.avg_cart_value),
       recoveredToday: todayStats.recovered_today,
@@ -258,6 +280,10 @@ export class AdminAbandonedCartsRepository {
   _formatListRow(row) {
     return {
       id: row.id,
+      priceMode: row.price_mode,
+      channel: row.price_mode === 'wholesale' ? 'B2B' : 'B2C',
+      vendorNames: row.vendor_names || [],
+      vendorReminderCount: row.vendor_reminder_count || 0,
       userId: row.user_id,
       userName: row.user_name,
       userPhone: row.user_phone,
@@ -275,9 +301,11 @@ export class AdminAbandonedCartsRepository {
     }
   }
 
-  _formatDetail(episode, items, events, notifications, coupons, history, customer) {
+  _formatDetail(episode, items, events, notifications, coupons, history, customer, vendorReminders = []) {
     return {
       id: episode.id,
+      priceMode: episode.price_mode,
+      channel: episode.price_mode === 'wholesale' ? 'B2B' : 'B2C',
       status: episode.status,
       abandonedAt: episode.abandoned_at,
       detectedAt: episode.detected_at,
@@ -309,6 +337,7 @@ export class AdminAbandonedCartsRepository {
         productId: i.product_id,
         shopId: i.shop_id,
         shopName: i.shop_name ?? null,
+        vendorName: i.vendor_name ?? null,
         productName: i.product_name,
         thumbnailUrl: i.product_thumbnail_url,
         unit: i.product_unit,
@@ -330,6 +359,16 @@ export class AdminAbandonedCartsRepository {
         body: n.body,
         sentBy: n.sent_by,
         createdAt: n.created_at,
+      })),
+      vendorReminders: vendorReminders.map((r) => ({
+        id: r.id,
+        vendorId: r.vendor_id,
+        vendorName: r.vendor_name,
+        template: r.template_key,
+        title: r.title,
+        body: r.body,
+        productCount: (r.product_ids || []).length,
+        createdAt: r.created_at,
       })),
       couponsIssued: coupons.map((c) => ({
         id: c.id,

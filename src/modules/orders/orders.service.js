@@ -428,7 +428,7 @@ export class OrdersService {
     if (payload.paymentMethod === 'COD' || walletCoveredInFull) {
       await this.cartRepo.clearCart(customerId, priceMode)
       await this.cartRepo.clearExtras(customerId, priceMode)
-      await markCartConverted({ userId: customerId, orderId: created[0].id, fastify: this.fastify })
+      await markCartConverted({ userId: customerId, orderId: created[0].id, priceMode, fastify: this.fastify })
 
       if (payload.couponCode && couponResult?.valid) {
         try {

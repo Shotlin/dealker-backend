@@ -18,8 +18,8 @@ export class AdminAbandonedCartsController {
   }
 
   async list(request, reply) {
-    const { page, limit, search, status, minValue, maxValue, sortBy, sortOrder } = request.query
-    const data = await svc.list({ page, limit, search, status, minValue, maxValue, sortBy, sortOrder })
+    const { page, limit, search, status, channel, minValue, maxValue, sortBy, sortOrder } = request.query
+    const data = await svc.list({ page, limit, search, status, channel, minValue, maxValue, sortBy, sortOrder })
     return success(data, 'Abandoned carts fetched')
   }
 

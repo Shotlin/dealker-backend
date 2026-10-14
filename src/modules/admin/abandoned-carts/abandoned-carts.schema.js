@@ -8,6 +8,7 @@ export const listAbandonedCartsSchema = {
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
       search: { type: 'string' },
       status: { type: 'string', enum: ['OPEN', 'RECOVERED', 'CONVERTED', 'EXPIRED', 'ALL'], default: 'OPEN' },
+      channel: { type: 'string', enum: ['ALL', 'B2B', 'B2C'], default: 'ALL' },
       minValue: { type: 'number', minimum: 0 },
       maxValue: { type: 'number', minimum: 0 },
       sortBy: { type: 'string', enum: ['priority_score', 'cart_value', 'abandoned_at', 'item_count'], default: 'priority_score' },

@@ -33,6 +33,7 @@ import { computeRecoveryPriorityScore } from '../modules/abandoned-carts/priorit
 import {
   ABANDONMENT_THRESHOLD_MS,
   ABANDONED_CART_SWEEP_BATCH_LIMIT,
+  ABANDONED_CART_PRICE_MODES,
 } from '../constants/abandonedCart.js'
 
 let _intervalHandle = null
@@ -112,14 +113,17 @@ async function _sweep() {
 }
 
 async function _processCandidate(userId, lastActivityMs) {
-  // A customer can hold a retail and a wholesale cart; snapshot whichever
-  // has live items (retail first).
-  let enrichedCart = await cartService.getCart(userId, 'retail')
-  if (!enrichedCart.items || enrichedCart.items.length === 0) {
-    enrichedCart = await cartService.getCart(userId, 'wholesale')
+  // A customer can hold a retail (B2C) and a wholesale (B2B) cart at once.
+  // Each non-empty cart is its own episode so vendors see the right channel.
+  let anyLive = false
+  for (const priceMode of ABANDONED_CART_PRICE_MODES) {
+    const enrichedCart = await cartService.getCart(userId, priceMode)
+    if (!enrichedCart.items || enrichedCart.items.length === 0) continue
+    anyLive = true
+    await _recordEpisode(userId, lastActivityMs, enrichedCart, priceMode)
   }
 
-  if (!enrichedCart.items || enrichedCart.items.length === 0) {
+  if (!anyLive) {
     // Every line item's shop/product went inactive since the last
     // activity, or the cart is genuinely empty — self-heal so this
     // user isn't reprocessed forever.
@@ -127,6 +131,19 @@ async function _processCandidate(userId, lastActivityMs) {
     return
   }
 
+  // A user who's just been recorded (new detection or resweep) has no
+  // reason to occupy a slot in the next tick's candidate batch — nothing
+  // about their cart will change again until they touch it, which
+  // independently re-adds them here with a fresh score via saveCart's own
+  // zadd. Without this, a user who was detected once stays in the ZSET at
+  // their original (increasingly ancient) score forever, and since
+  // getInactiveUserIds selects the LOWEST scores first, a backlog of
+  // already-detected users can permanently starve genuinely fresh
+  // candidates out of every batch once it reaches the per-tick limit.
+  await cartRepository.removeActivity(userId)
+}
+
+async function _recordEpisode(userId, lastActivityMs, enrichedCart, priceMode) {
   // Priority scoring is only ever used by recordAbandonment() on a first
   // detection (ignored on resweep of an already-OPEN episode) — computed
   // unconditionally here anyway since it's cheap (two small indexed
@@ -148,29 +165,19 @@ async function _processCandidate(userId, lastActivityMs) {
     userId,
     enrichedCart,
     lastActivityMs,
-    priorityScoring
+    priorityScoring,
+    priceMode
   )
 
   if (isNew) {
     logger.info(
-      { userId, cartValue: enrichedCart.subtotal, priorityScore: priorityScoring.score },
+      { userId, priceMode, cartValue: enrichedCart.subtotal, priorityScore: priorityScoring.score },
       'Abandoned cart detected'
     )
     if (_fastify?.emitAbandonedCartUpdate) {
-      _fastify.emitAbandonedCartUpdate({ userId, abandonedCartId: id, status: 'DETECTED' })
+      _fastify.emitAbandonedCartUpdate({ userId, abandonedCartId: id, status: 'DETECTED', priceMode })
     }
   }
-
-  // A user who's just been recorded (new detection or resweep) has no
-  // reason to occupy a slot in the next tick's candidate batch — nothing
-  // about their cart will change again until they touch it, which
-  // independently re-adds them here with a fresh score via saveCart's own
-  // zadd. Without this, a user who was detected once stays in the ZSET at
-  // their original (increasingly ancient) score forever, and since
-  // getInactiveUserIds selects the LOWEST scores first, a backlog of
-  // already-detected users can permanently starve genuinely fresh
-  // candidates out of every batch once it reaches the per-tick limit.
-  await cartRepository.removeActivity(userId)
 }
 
 /**

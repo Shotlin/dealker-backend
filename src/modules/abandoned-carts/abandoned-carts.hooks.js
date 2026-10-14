@@ -10,9 +10,9 @@ const repo = new AbandonedCartsRepository()
  */
 
 /** An order was placed/paid — close the user's OPEN episode as CONVERTED. */
-export async function markCartConverted({ userId, orderId, fastify = null }) {
+export async function markCartConverted({ userId, orderId, priceMode = null, fastify = null }) {
   try {
-    const row = await repo.markConvertedByUserId(userId, orderId)
+    const row = await repo.markConvertedByUserId(userId, orderId, priceMode)
     if (row) fastify?.emitAbandonedCartUpdate?.({ userId, abandonedCartId: row.id, status: 'CONVERTED' })
     return row
   } catch (err) {
@@ -22,9 +22,9 @@ export async function markCartConverted({ userId, orderId, fastify = null }) {
 }
 
 /** The customer emptied their cart by hand — nothing left to recover. */
-export async function markCartCleared({ userId, fastify = null }) {
+export async function markCartCleared({ userId, priceMode = null, fastify = null }) {
   try {
-    const row = await repo.closeOpenByUserId(userId, 'CART_CLEARED')
+    const row = await repo.closeOpenByUserId(userId, 'CART_CLEARED', priceMode)
     if (row) fastify?.emitAbandonedCartUpdate?.({ userId, abandonedCartId: row.id, status: 'EXPIRED' })
     return row
   } catch (err) {

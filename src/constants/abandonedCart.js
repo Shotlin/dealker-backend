@@ -31,7 +31,12 @@ export const ABANDONED_CART_EVENT_TYPE = {
   EXPIRED: 'EXPIRED',
   REMINDER_SENT: 'REMINDER_SENT',
   COUPON_ISSUED: 'COUPON_ISSUED',
+  VENDOR_REMINDER_SENT: 'VENDOR_REMINDER_SENT',
 }
+
+// Cart channels: retail = B2C, wholesale = B2B.
+export const ABANDONED_CART_PRICE_MODES = ['retail', 'wholesale']
+export const channelOf = (priceMode) => (priceMode === 'wholesale' ? 'B2B' : 'B2C')
 
 // Minimum gap between two reminders to the SAME abandoned cart, so a
 // customer is never spammed by repeated admin clicks or bulk sends.
@@ -40,6 +45,19 @@ export const ABANDONED_CART_REMINDER_COOLDOWN_MS =
   (Number.isFinite(cooldownMinutes) && cooldownMinutes >= 0 ? cooldownMinutes : 60) * 60 * 1000
 
 export const ABANDONED_CART_BULK_LIMIT = 100
+
+// Vendor reminder rules. A vendor may only nudge about their OWN items, and the
+// customer is protected from being chased by many sellers at once:
+//   - one reminder per vendor per cart per cooldown (default 24 h),
+//   - at most VENDOR_MAX_PER_CART reminders per vendor per cart,
+//   - at most CUSTOMER_DAILY_CAP abandoned-cart pushes per customer per 24 h (all senders).
+const vendorCooldownMinutes = Number(process.env.ABANDONED_CART_VENDOR_COOLDOWN_MINUTES)
+export const VENDOR_REMINDER_COOLDOWN_MS =
+  (Number.isFinite(vendorCooldownMinutes) && vendorCooldownMinutes >= 0 ? vendorCooldownMinutes : 24 * 60) * 60 * 1000
+export const VENDOR_MAX_PER_CART = 3
+export const CUSTOMER_DAILY_CAP = 4
+// Real stock at or below this counts as "low stock" (the only urgency a vendor may claim).
+export const LOW_STOCK_THRESHOLD = 5
 
 // One-click "quick coupon" presets. Each becomes a real coupon in the
 // existing coupon engine, individually targeted to the one customer, single

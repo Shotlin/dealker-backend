@@ -52,9 +52,9 @@ export class CartService {
    * here must never surface to the customer — this is a side effect of
    * shopping, not part of the cart mutation contract.
    */
-  async _maybeMarkRecovered(userId) {
+  async _maybeMarkRecovered(userId, priceMode = null) {
     try {
-      const row = await this.abandonedCartsRepo.markRecoveredByUserId(userId)
+      const row = await this.abandonedCartsRepo.markRecoveredByUserId(userId, priceMode)
       if (row && this.fastify?.emitAbandonedCartUpdate) {
         this.fastify.emitAbandonedCartUpdate({
           userId,
@@ -370,7 +370,7 @@ export class CartService {
       },
       'Cart item added/updated'
     )
-    await this._maybeMarkRecovered(userId)
+    await this._maybeMarkRecovered(userId, mode)
 
     return { success: true, cart: await this._enrichCart(userId, cartItems, mode) }
   }
@@ -512,7 +512,7 @@ export class CartService {
 
     cartItems[idx].quantity = qty
     await this.repo.saveCart(userId, cartItems, mode)
-    await this._maybeMarkRecovered(userId)
+    await this._maybeMarkRecovered(userId, mode)
 
     return { success: true, cart: await this._enrichCart(userId, cartItems, mode) }
   }
@@ -574,7 +574,7 @@ export class CartService {
     })
 
     await this.repo.saveCart(userId, filtered, mode)
-    await this._maybeMarkRecovered(userId)
+    await this._maybeMarkRecovered(userId, mode)
     return { success: true, cart: await this._enrichCart(userId, filtered, mode) }
   }
 
@@ -587,7 +587,7 @@ export class CartService {
     const mode = normalizePriceMode(priceMode)
     await this.repo.clearCart(userId, mode)
     await this.repo.clearExtras(userId, mode)
-    await markCartCleared({ userId, fastify: this.fastify })
+    await markCartCleared({ userId, priceMode: mode, fastify: this.fastify })
   }
 
   // ────────────────────────────────────────────────────────

@@ -4,7 +4,10 @@ import { requireVendorScope } from '../../middlewares/vendor-scope.js'
 const uuid = { type: 'string', format: 'uuid' }
 const wrap = (fn) => async (req, reply) => {
   try { return await fn(req, reply) } catch (e) {
-    if (e?.statusCode && e.statusCode < 500) return reply.code(e.statusCode).send({ success: false, message: e.message, code: e.code })
+    if (e?.statusCode && e.statusCode < 500) {
+      const wallet = e.required != null ? { required: e.required, balance: e.balance, shortfall: e.shortfall } : {}
+      return reply.code(e.statusCode).send({ success: false, message: e.message, code: e.code, ...wallet })
+    }
     throw e
   }
 }
@@ -16,6 +19,9 @@ const requirementBody = {
     categoryId: uuid, conditionPref: { enum: ['ANY', 'NEW', 'USED_OR_REFURBISHED'] }, quantity: { type: 'integer', minimum: 1, maximum: 100000 },
     targetPrice: { type: ['number', 'null'], minimum: 0 }, description: { type: 'string', maxLength: 3000 }, deliveryCity: { type: 'string', maxLength: 100 },
     deliveryPincode: { type: 'string', maxLength: 10 }, responseDeadline: { type: 'string' }, requiredBy: { type: 'string' },
+    storage: { type: 'string', maxLength: 20 }, targetPriceMax: { type: ['number', 'null'], minimum: 0 },
+    minBatteryHealth: { type: ['integer', 'null'], minimum: 1, maximum: 100 }, displayPref: { enum: ['ANY', 'ORIGINAL', 'GRADE_AB'] },
+    fulfilmentPref: { enum: ['ANY', 'PICKUP', 'DELIVERY'] }, isUrgent: { type: 'boolean' },
   }, additionalProperties: false,
 }
 const quoteBody = {
@@ -24,6 +30,7 @@ const quoteBody = {
     quantity: { type: 'integer', minimum: 1 }, unitPrice: { type: 'number', minimum: 0 },
     condition: { enum: ['NEW', 'OPEN_BOX', 'REFURBISHED', 'USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR'] },
     deliveryDays: { type: 'integer', minimum: 0, maximum: 60 }, note: { type: 'string', maxLength: 1000 }, photos: { type: 'array', items: { type: 'string' }, maxItems: 6 },
+    listingId: uuid,
   }, additionalProperties: false,
 }
 
@@ -33,6 +40,10 @@ export async function vendorB2bRoutes(fastify) {
   const actor = (req) => ({ userId: req.userId || req.user.id, vendorId: req.vendorId, label: 'Vendor' })
 
   fastify.get('/requirements', { preHandler: pre }, wrap(async (req) => ({ success: true, ...(await b2b.listForVendor(req.vendorId, req.query || {})) })))
+  fastify.get('/demand/summary', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.demandSummary(req.vendorId) })))
+  fastify.get('/wallet', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.walletFor(req.vendorId) })))
+  fastify.get('/requirements/:id/match', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.matchFor(req.params.id, req.vendorId) })))
+  fastify.post('/requirements/:id/dismiss', { preHandler: pre }, wrap(async (req) => { await b2b.dismiss(req.params.id, req.vendorId); return { success: true } }))
   fastify.post('/requirements', { preHandler: pre, schema: { body: requirementBody } }, wrap(async (req, reply) =>
     reply.code(201).send({ success: true, data: await b2b.createRequirement(req.body, actor(req)) })))
   fastify.get('/requirements/:id', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.detail(req.params.id, { vendorId: req.vendorId }) })))
@@ -49,11 +60,17 @@ export async function vendorB2bRoutes(fastify) {
   fastify.post('/requirements/:id/pay', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.pay(req.params.id, req.body || {}, actor(req)) })))
 
   fastify.get('/orders', { preHandler: pre }, wrap(async (req) =>
-    ({ success: true, ...(await b2b.listOrders({ vendorId: req.vendorId, role: req.query?.role === 'selling' ? 'selling' : 'buying', status: req.query?.status, page: req.query?.page })) })))
+    ({ success: true, ...(await b2b.listOrders({ vendorId: req.vendorId, role: req.query?.role === 'selling' ? 'selling' : 'buying', status: req.query?.status, bucket: req.query?.bucket, page: req.query?.page, limit: req.query?.limit })) })))
   fastify.post('/orders/:id/status', {
     preHandler: pre,
-    schema: { body: { type: 'object', required: ['status'], properties: { status: { enum: ['PACKED', 'DISPATCHED', 'DELIVERED'] }, courierName: { type: 'string' }, awb: { type: 'string' }, trackingUrl: { type: 'string' } } } },
+    schema: { body: { type: 'object', required: ['status'], properties: { status: { enum: ['PACKED', 'DISPATCHED', 'DELIVERED'] }, courierName: { type: 'string' }, awb: { type: 'string' }, trackingUrl: { type: 'string' },
+      fulfilmentType: { enum: ['DELIVERY', 'PICKUP'] }, pickupAt: { type: 'string' }, pickupNote: { type: 'string', maxLength: 500 } } } },
   }, wrap(async (req) => { await b2b.sellerUpdate(req.params.id, req.vendorId, req.body, actor(req)); return { success: true } }))
+  fastify.get('/orders/:id', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.orderDetail(req.params.id, { vendorId: req.vendorId }) })))
+  fastify.post('/orders/:id/cancel', {
+    preHandler: pre,
+    schema: { body: { type: 'object', required: ['reason'], properties: { reason: { type: 'string', minLength: 3, maxLength: 500 } } } },
+  }, wrap(async (req) => ({ success: true, data: await b2b.cancelPaidOrder(req.params.id, req.vendorId, req.body.reason, actor(req)) })))
   fastify.post('/orders/:id/receive', {
     preHandler: pre,
     schema: { body: { type: 'object', properties: { receivedQuantity: { type: 'integer', minimum: 0 }, ok: { type: 'boolean' }, note: { type: 'string', maxLength: 1000 } } } },
@@ -66,6 +83,7 @@ export async function adminB2bRoutes(fastify) {
   const actor = (req) => ({ userId: req.userId || req.user.id, isAdmin: true, label: 'Dealker admin' })
 
   fastify.get('/stats', { preHandler: pre }, wrap(async () => ({ success: true, data: await b2b.stats() })))
+  fastify.get('/insights', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.demandInsights({ days: req.query?.days }) })))
   fastify.get('/requirements', { preHandler: pre }, wrap(async (req) => ({ success: true, ...(await b2b.adminRequirements(req.query || {})) })))
   fastify.get('/requirements/:id', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.detail(req.params.id, { isAdmin: true }) })))
   fastify.post('/requirements/:id/cancel', { preHandler: pre }, wrap(async (req) => { await b2b.cancelRequirement(req.params.id, actor(req), req.body?.reason); return { success: true } }))
@@ -95,12 +113,18 @@ export async function adminB2bRoutes(fastify) {
   fastify.post('/requirements/:id/pay', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.pay(req.params.id, req.body || {}, actor(req)) })))
   fastify.post('/orders/:id/status', {
     preHandler: pre,
-    schema: { body: { type: 'object', required: ['status'], properties: { status: { enum: ['PACKED', 'DISPATCHED', 'DELIVERED'] }, courierName: { type: 'string' }, awb: { type: 'string' }, trackingUrl: { type: 'string' } } } },
+    schema: { body: { type: 'object', required: ['status'], properties: { status: { enum: ['PACKED', 'DISPATCHED', 'DELIVERED'] }, courierName: { type: 'string' }, awb: { type: 'string' }, trackingUrl: { type: 'string' },
+      fulfilmentType: { enum: ['DELIVERY', 'PICKUP'] }, pickupAt: { type: 'string' }, pickupNote: { type: 'string', maxLength: 500 } } } },
   }, wrap(async (req) => { await b2b.sellerUpdate(req.params.id, null, req.body, actor(req)); return { success: true } }))
   fastify.post('/orders/:id/receive', {
     preHandler: pre,
     schema: { body: { type: 'object', properties: { receivedQuantity: { type: 'integer', minimum: 0 }, ok: { type: 'boolean' }, note: { type: 'string', maxLength: 1000 } } } },
   }, wrap(async (req) => { await b2b.receive(req.params.id, req.body || {}, actor(req)); return { success: true } }))
+  fastify.get('/orders/:id', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.orderDetail(req.params.id, { isAdmin: true }) })))
+  fastify.post('/orders/:id/cancel', {
+    preHandler: pre,
+    schema: { body: { type: 'object', required: ['reason'], properties: { reason: { type: 'string', minLength: 3, maxLength: 500 } } } },
+  }, wrap(async (req) => ({ success: true, data: await b2b.cancelPaidOrder(req.params.id, null, req.body.reason, actor(req)) })))
   fastify.post('/orders/:id/resolve', {
     preHandler: pre,
     schema: { body: { type: 'object', required: ['decision'], properties: { decision: { enum: ['RELEASE', 'REFUND', 'PARTIAL'] }, releaseQuantity: { type: 'integer', minimum: 1 }, note: { type: 'string', maxLength: 500 } } } },

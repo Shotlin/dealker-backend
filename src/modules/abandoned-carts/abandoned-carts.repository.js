@@ -26,16 +26,17 @@ export class AbandonedCartsRepository {
    * @param {{items: Array<object>, subtotal: number}} enrichedCart - shape returned by CartService.getCart()
    * @param {number} abandonedAtMs - epoch-ms from the cart-activity ZSET score
    * @param {{score: number, breakdown: object}|null} priorityScoring - only computed on first detection (pass null on resweep — ignored when an OPEN row already exists)
+   * @param {'retail'|'wholesale'} [priceMode] - which cart this episode snapshots (retail = B2C, wholesale = B2B); one OPEN episode per (user, channel)
    * @returns {Promise<{id: string, isNew: boolean}>}
    */
-  async recordAbandonment(userId, enrichedCart, abandonedAtMs, priorityScoring) {
+  async recordAbandonment(userId, enrichedCart, abandonedAtMs, priorityScoring, priceMode = 'retail') {
     const client = await getClient()
     try {
       await client.query('BEGIN')
 
       const { rows: [existing] } = await client.query(
-        `SELECT id FROM abandoned_carts WHERE user_id = $1 AND status = 'OPEN' FOR UPDATE`,
-        [userId]
+        `SELECT id FROM abandoned_carts WHERE user_id = $1 AND price_mode = $2 AND status = 'OPEN' FOR UPDATE`,
+        [userId, priceMode]
       )
 
       const itemCount = enrichedCart.items.length
@@ -64,10 +65,10 @@ export class AbandonedCartsRepository {
         const breakdown = priorityScoring?.breakdown ?? {}
         const { rows: [inserted] } = await client.query(
           `INSERT INTO abandoned_carts
-             (user_id, status, abandoned_at, item_count, total_quantity, cart_value, priority_score, priority_breakdown)
-           VALUES ($1, 'OPEN', to_timestamp($2 / 1000.0), $3, $4, $5, $6, $7)
+             (user_id, status, abandoned_at, item_count, total_quantity, cart_value, priority_score, priority_breakdown, price_mode)
+           VALUES ($1, 'OPEN', to_timestamp($2 / 1000.0), $3, $4, $5, $6, $7, $8)
            RETURNING id`,
-          [userId, abandonedAtMs, itemCount, totalQuantity, cartValue, score, JSON.stringify(breakdown)]
+          [userId, abandonedAtMs, itemCount, totalQuantity, cartValue, score, JSON.stringify(breakdown), priceMode]
         )
         episodeId = inserted.id
         await client.query(
@@ -118,63 +119,63 @@ export class AbandonedCartsRepository {
    * deferred to the next sweep. Harmless no-op (0 rows) when there's no
    * open episode, which is the common case for most cart activity.
    */
-  async markRecoveredByUserId(userId) {
-    const { rows: [row] } = await query(
+  async markRecoveredByUserId(userId, priceMode = null) {
+    const { rows } = await query(
       `UPDATE abandoned_carts SET status = 'RECOVERED', recovered_at = NOW(), updated_at = NOW()
-       WHERE user_id = $1 AND status = 'OPEN'
+       WHERE user_id = $1 AND status = 'OPEN' AND ($2::text IS NULL OR price_mode = $2)
        RETURNING id`,
-      [userId]
+      [userId, priceMode]
     )
-    if (row) {
+    for (const row of rows) {
       await query(
         `INSERT INTO abandoned_cart_events (abandoned_cart_id, event_type, actor_type, actor_id)
          VALUES ($1, 'RECOVERED', 'CUSTOMER', $2)`,
         [row.id, userId]
       )
     }
-    return row || null
+    return rows[0] || null
   }
 
   /**
    * Flips a user's OPEN episode (if any) to CONVERTED — called from
    * OrdersService right after an order's transaction commits.
    */
-  async markConvertedByUserId(userId, orderId) {
-    const { rows: [row] } = await query(
+  async markConvertedByUserId(userId, orderId, priceMode = null) {
+    const { rows } = await query(
       `UPDATE abandoned_carts SET status = 'CONVERTED', converted_at = NOW(), converted_order_id = $2, updated_at = NOW()
-       WHERE user_id = $1 AND status = 'OPEN'
+       WHERE user_id = $1 AND status = 'OPEN' AND ($3::text IS NULL OR price_mode = $3)
        RETURNING id`,
-      [userId, orderId]
+      [userId, orderId, priceMode]
     )
-    if (row) {
+    for (const row of rows) {
       await query(
         `INSERT INTO abandoned_cart_events (abandoned_cart_id, event_type, actor_type, actor_id, metadata)
          VALUES ($1, 'CONVERTED', 'CUSTOMER', $2, $3)`,
         [row.id, userId, JSON.stringify({ orderId })]
       )
     }
-    return row || null
+    return rows[0] || null
   }
 
   /**
    * Closes a user's OPEN episode as EXPIRED with a reason (e.g. the customer
    * emptied the cart themselves), so it stops appearing as recoverable.
    */
-  async closeOpenByUserId(userId, reason) {
-    const { rows: [row] } = await query(
+  async closeOpenByUserId(userId, reason, priceMode = null) {
+    const { rows } = await query(
       `UPDATE abandoned_carts SET status = 'EXPIRED', expired_at = NOW(), updated_at = NOW()
-       WHERE user_id = $1 AND status = 'OPEN'
+       WHERE user_id = $1 AND status = 'OPEN' AND ($2::text IS NULL OR price_mode = $2)
        RETURNING id`,
-      [userId]
+      [userId, priceMode]
     )
-    if (row) {
+    for (const row of rows) {
       await query(
         `INSERT INTO abandoned_cart_events (abandoned_cart_id, event_type, actor_type, actor_id, metadata)
          VALUES ($1, 'EXPIRED', 'CUSTOMER', $2, $3)`,
         [row.id, userId, JSON.stringify({ reason })]
       )
     }
-    return row || null
+    return rows[0] || null
   }
 
   /**

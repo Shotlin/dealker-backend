@@ -22,6 +22,10 @@ const bodySchema = {
     sku: { type: 'string', maxLength: 80 }, hsnCode: { type: 'string', maxLength: 20 }, gstRate: { type: ['number', 'null'] },
     specifications: { type: 'object' }, handlingTimeDays: { type: 'integer', minimum: 0, maximum: 30 }, returnPolicyDays: { type: 'integer', minimum: 0, maximum: 60 },
     codEligible: { type: 'boolean' }, nationwide: { type: 'boolean' }, localDelivery: { type: 'boolean' }, weightGrams: { type: ['integer', 'null'], minimum: 1 },
+    sellB2c: { type: 'boolean' }, sellB2b: { type: 'boolean' },
+    wholesalePrice: { type: ['number', 'null'], minimum: 0 }, moq: { type: 'integer', minimum: 1, maximum: 10000 },
+    b2bDiscountPct: { type: ['number', 'null'], minimum: 0, maximum: 50 }, b2bNotes: { type: ['string', 'null'], maxLength: 500 },
+    videoUrl: { type: ['string', 'null'], maxLength: 2048 }, vendorQc: { type: ['object', 'null'] },
   },
   additionalProperties: false,
 }

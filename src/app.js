@@ -594,6 +594,10 @@ export const buildApp = async () => {
   const { adminOrderStagesRoutes } = await import("./modules/order-stages/order-stages.routes.js");
   await app.register(adminOrderStagesRoutes, { prefix: "/api/v1/admin/order-stages" });
 
+  // Vendor abandoned carts — a vendor's own slice of idle B2C/B2B carts + targeted reminders
+  const { default: vendorAbandonedCartsRoutes } = await import("./modules/vendor-abandoned-carts/vendor-abandoned-carts.routes.js");
+  await app.register(vendorAbandonedCartsRoutes, { prefix: "/api/v1/manage/abandoned-carts" });
+
   // B2B abandoned carts + follow-ups
   const { adminAbandonedB2bRoutes } = await import("./modules/abandoned-b2b/abandoned-b2b.routes.js");
   await app.register(adminAbandonedB2bRoutes, { prefix: "/api/v1/admin/abandoned-b2b" });

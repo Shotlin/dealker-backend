@@ -84,6 +84,7 @@ describe('AbandonedCartsRepository.recordAbandonment', () => {
       150, // cart_value
       72.5, // priority_score
       JSON.stringify({ cartValue: { raw: 150 } }),
+      'retail', // price_mode: the cart channel (retail = B2C)
     ])
 
     const eventCall = mockClient.query.mock.calls.find(
@@ -160,7 +161,18 @@ describe('AbandonedCartsRepository — recovery/conversion flips', () => {
     const [sql, params] = query.mock.calls[0]
     expect(sql).toContain("status = 'OPEN'")
     expect(sql).toContain("SET status = 'RECOVERED'")
-    expect(params).toEqual([USER_ID])
+    expect(params).toEqual([USER_ID, null]) // null = every channel
+  })
+
+  it('markRecoveredByUserId can be limited to one channel', async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: CART_ID }] }).mockResolvedValueOnce(undefined)
+
+    const repo = new AbandonedCartsRepository()
+    await repo.markRecoveredByUserId(USER_ID, 'retail')
+
+    const [sql, params] = query.mock.calls[0]
+    expect(sql).toContain('price_mode')
+    expect(params).toEqual([USER_ID, 'retail'])
   })
 
   it('markRecoveredByUserId is a harmless no-op when there is no open episode', async () => {
@@ -184,7 +196,7 @@ describe('AbandonedCartsRepository — recovery/conversion flips', () => {
     expect(row).toEqual({ id: CART_ID })
     const [sql, params] = query.mock.calls[0]
     expect(sql).toContain("SET status = 'CONVERTED'")
-    expect(params).toEqual([USER_ID, orderId])
+    expect(params).toEqual([USER_ID, orderId, null])
   })
 })
 

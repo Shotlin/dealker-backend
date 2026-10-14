@@ -499,7 +499,7 @@ export class WalletService {
         await cartRepo.clearCart(userId)
         await cartRepo.clearExtras(userId)
         const { markCartConverted } = await import('../abandoned-carts/abandoned-carts.hooks.js')
-        await markCartConverted({ userId, orderId, fastify: this.fastify })
+        await markCartConverted({ userId, priceMode: 'retail', orderId, fastify: this.fastify })
       } catch (cartErr) {
         logger.warn({ err: cartErr.message, userId }, 'Cart clear after wallet pay failed (non-critical)')
       }
