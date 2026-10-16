@@ -17,6 +17,7 @@ async function getPlatformShopName() {
  *   sold_by     — the seller: the product's vendor, else its vendor_name, else the platform store
  *   created_at  — so the card can flag recently added products as "NEW"
  *   attributes  — spec list (storage, colour...) for the variant line under the name
+ *   brand       — the product's brand (search filters group by it)
  * One extra query per call, keyed by product id; rows without a match are returned unchanged.
  */
 export async function withCardFields(products) {
@@ -25,7 +26,7 @@ export async function withCardFields(products) {
   if (ids.length === 0) return products
   const [{ rows }, storeName] = await Promise.all([
     query(
-      `SELECT p.id, p.created_at, p.attributes,
+      `SELECT p.id, p.created_at, p.attributes, p.brand,
               COALESCE(NULLIF(p.vendor_name, ''), v.name) AS seller
          FROM products p LEFT JOIN vendors v ON v.id = p.owner_vendor_id
         WHERE p.id = ANY($1::uuid[])`,
@@ -42,6 +43,7 @@ export async function withCardFields(products) {
       sold_by: extra.seller || storeName || null,
       created_at: extra.created_at,
       attributes: extra.attributes ?? p.attributes ?? null,
+      brand: p.brand ?? extra.brand ?? null,
     }
   })
 }

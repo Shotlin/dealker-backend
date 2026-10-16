@@ -11,12 +11,13 @@ describe('withCardFields', () => {
   it('adds sold_by (vendor, else platform store), created_at and attributes', async () => {
     query
       .mockResolvedValueOnce({ rows: [
-        { id: 'a', created_at: '2026-10-01', attributes: [{ name: 'Storage', value: '256GB' }], seller: 'TechHub Store' },
+        { id: 'a', created_at: '2026-10-01', attributes: [{ name: 'Storage', value: '256GB' }], brand: 'Apple', seller: 'TechHub Store' },
         { id: 'b', created_at: '2026-09-01', attributes: null, seller: null },
       ] })
       .mockResolvedValueOnce({ rows: [{ name: 'Dealker Official' }] })
     const out = await withCardFields([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }])
     expect(out[0]).toMatchObject({ sold_by: 'TechHub Store', created_at: '2026-10-01' })
+    expect(out[0].brand).toBe('Apple')
     expect(out[0].attributes).toEqual([{ name: 'Storage', value: '256GB' }])
     expect(out[1].sold_by).toBe('Dealker Official')
     expect(out[2]).toEqual({ id: 'c', name: 'C' }) // unknown id: unchanged

@@ -88,8 +88,10 @@ export class ProductsController {
     const { q, ...filters } = request.query;
     const customerContext = await resolveCustomerContext(request);
     const result = await this.service.search(q, filters, customerContext);
+    // Same seller / brand / created_at fields the home product cards carry.
+    const data = await withCardFields(result.data);
     return reply.code(200).send(
-      success(result.data, "Search results", {
+      success(data, "Search results", {
         pagination: result.pagination,
         suggestions: result.suggestions || [],
       }),
