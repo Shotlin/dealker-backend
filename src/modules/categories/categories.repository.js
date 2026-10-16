@@ -324,6 +324,7 @@ export class CategoriesRepository {
              AND sp.deleted_at IS NULL
              AND s.is_active = true
              AND s.deleted_at IS NULL
+             AND (s.vendor_id IS NULL OR (sp.approval_status = 'APPROVED' AND sp.listing_status = 'ACTIVE' AND sp.sell_b2c = TRUE AND sp.nationwide_shipping_enabled = TRUE))
         )`)
         paramIdx++
       }

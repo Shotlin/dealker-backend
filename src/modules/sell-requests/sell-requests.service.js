@@ -108,6 +108,8 @@ export async function getSettingsForAdmin() {
     payoutWalletEnabled: s.payout_wallet_enabled,
     payoutUpiEnabled: s.payout_upi_enabled,
     payoutBankEnabled: s.payout_bank_enabled,
+    hubBannerUrl: s.hub_banner_url || '',
+    hubStepIcons: Array.isArray(s.hub_step_icons) ? s.hub_step_icons : [],
   }
 }
 
@@ -160,6 +162,8 @@ export async function updateSettings(actor, input) {
     estimate_spread_pct: input.estimateSpreadPct !== undefined ? pct(input.estimateSpreadPct, 'estimateSpreadPct') : undefined,
     require_vendor_funding: bool('requireVendorFunding'), pickup_enabled: bool('pickupEnabled'), dropoff_enabled: bool('dropoffEnabled'),
     payout_wallet_enabled: bool('payoutWalletEnabled'), payout_upi_enabled: bool('payoutUpiEnabled'), payout_bank_enabled: bool('payoutBankEnabled'),
+    hub_banner_url: input.hubBannerUrl !== undefined ? (String(input.hubBannerUrl || '').trim().slice(0, 500) || null) : undefined,
+    hub_step_icons: input.hubStepIcons !== undefined ? JSON.stringify((Array.isArray(input.hubStepIcons) ? input.hubStepIcons : []).slice(0, 3).map((u) => String(u || '').trim().slice(0, 500))) : undefined,
   }
   const jk = Object.keys(journeyCols).filter((k) => journeyCols[k] !== undefined)
   if (jk.length) await query(`UPDATE sell_settings SET ${jk.map((k, i) => `${k} = $${i + 1}`).join(', ')} WHERE id = TRUE`, jk.map((k) => journeyCols[k]))
@@ -532,6 +536,13 @@ export async function createRequest(actor, input) {
       const images = await cleanImages(input.images, q.settings.max_images)
       const expected = input.expectedPrice == null || input.expectedPrice === '' ? q.value : Number(input.expectedPrice)
       if (!Number.isFinite(expected) || expected < 0) throw new SellError('VALIDATION', 'Expected price is invalid', 422)
+      // The customer names their own price; the system value is only a suggestion. Keep it sane so buyers are not shown nonsense.
+      if (input.type !== 'EXCHANGE' && expected > Number(q.base) * 2) {
+        throw new SellError('ASKING_PRICE_TOO_HIGH', `Your price is far above what this phone sells for. Please ask for ${Math.round(Number(q.base) * 2).toLocaleString('en-IN')} or less.`, 422)
+      }
+      if (input.type !== 'EXCHANGE' && input.expectedPrice != null && input.expectedPrice !== '' && expected < 100) {
+        throw new SellError('VALIDATION', 'Please enter your price in rupees', 422)
+      }
       const exchange = exchangeIn
         ? { ...exchangeIn, tradeInValue: q.value, payable: Math.max(0, exchangeIn.newProductPrice - q.value) }
         : null
@@ -589,7 +600,32 @@ export async function mine(userId, kind, { page = 1, limit = 20 } = {}) {
   const off = (Math.max(1, Number(page)) - 1) * lim
   const { rows } = await query(`${SELECT_REQ} WHERE r.user_id = $1 AND r.kind = $4 ORDER BY r.created_at DESC LIMIT $2 OFFSET $3`, [userId, lim, off, kind])
   const { rows: c } = await query('SELECT COUNT(*)::int AS n FROM sell_requests WHERE user_id = $1 AND kind = $2', [userId, kind])
-  return { success: true, data: { items: rows.map((r) => serialize(r, { assignedVendorName: null })), total: c[0].n } }
+  const items = rows.map((r) => serialize(r, { assignedVendorName: null }))
+  if (kind === 'SELL' && items.length) {
+    // What the sell-your-phone list needs per row: the phone's catalogue photo, how many buyers offered, the best offer, unread chat.
+    const ids = items.map((i) => i.id)
+    const { rows: x } = await query(
+      `SELECT r.id, COALESCE(NULLIF(m.image_url, ''), pp.thumbnail_url) AS image_url,
+              (SELECT COUNT(*)::int FROM sell_request_offers o WHERE o.request_id = r.id AND o.status IN ('OPEN','ACCEPTED')) AS offer_count,
+              (SELECT MAX(o.amount) FROM sell_request_offers o WHERE o.request_id = r.id AND o.status IN ('OPEN','ACCEPTED')) AS best_offer,
+              (SELECT COUNT(*)::int FROM sell_request_messages g WHERE g.request_id = r.id AND g.sender_role = 'VENDOR' AND g.customer_read_at IS NULL) AS unread
+         FROM sell_requests r LEFT JOIN sell_device_models m ON m.id = r.model_id
+         -- No catalogue photo for the model yet: borrow the thumbnail of the shop's matching product so the list is never blank.
+         LEFT JOIN LATERAL (SELECT p.thumbnail_url FROM products p
+                             WHERE p.is_active AND p.deleted_at IS NULL AND p.thumbnail_url IS NOT NULL AND p.thumbnail_url <> ''
+                               AND p.name ILIKE '%' || r.model_name || '%' ORDER BY p.total_sold DESC, p.created_at LIMIT 1) pp ON TRUE
+        WHERE r.id = ANY($1::uuid[])`, [ids])
+    const by = new Map(x.map((e) => [e.id, e]))
+    for (const it of items) {
+      const e = by.get(it.id)
+      it.imageUrl = e?.image_url || null
+      it.offerCount = e?.offer_count ?? 0
+      it.bestOffer = num(e?.best_offer)
+      it.unreadMessages = e?.unread ?? 0
+      it.askingPrice = it.expectedPrice
+    }
+  }
+  return { success: true, data: { items, total: c[0].n } }
 }
 
 export async function getMine(userId, id, kind) {

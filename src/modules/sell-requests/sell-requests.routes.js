@@ -18,6 +18,7 @@ import * as svc from './sell-requests.service.js'
 import * as evidence from './evidence.service.js'
 import * as qc from './request-qc.service.js'
 import * as journey from './sell-journey.service.js'
+import * as chat from './sell-chat.service.js'
 import { evidencePath, verifyEvidence } from './evidence-storage.js'
 
 const idParams = {
@@ -73,7 +74,8 @@ function customerRoutes(scopeKind) {
       /** Windows, switches and limits the app needs to render the journey. */
       fastify.get('/journey-config', { preHandler: auth }, wrap(async () => {
         const s = await svc.getSettings()
-        return ok({ enabled: s.enabled, offerWindowMinutes: s.offer_window_minutes, maxOfferRefreshes: s.max_offer_refreshes, pickupEnabled: s.pickup_enabled,
+        return ok({ hubBannerUrl: s.hub_banner_url || null, hubStepIcons: Array.isArray(s.hub_step_icons) ? s.hub_step_icons : [],
+          enabled: s.enabled, offerWindowMinutes: s.offer_window_minutes, maxOfferRefreshes: s.max_offer_refreshes, pickupEnabled: s.pickup_enabled,
           dropoffEnabled: s.dropoff_enabled, pickupWindows: journey.PICKUP_WINDOWS, maxImages: s.max_images, maxVideos: s.max_videos })
       }))
       fastify.post('/verify-imei', { preHandler: auth }, wrap(async (request) => ok(await journey.verifyImei(request.user.id, request.body || {}))))
@@ -89,6 +91,12 @@ function customerRoutes(scopeKind) {
       fastify.post('/:id/offers/refresh', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await journey.refreshOffers(request.user.id, request.params.id))))
       fastify.post('/:id/offers/:offerId/accept', { preHandler: auth, schema: { params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, offerId: { type: 'string', format: 'uuid' } }, required: ['id', 'offerId'] } } },
         wrap(async (request) => ok(await journey.acceptOffer(request.user.id, request.params.id, request.params.offerId))))
+      // negotiation: one chat thread per buyer
+      const threadParams = { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, vendorId: { type: 'string', format: 'uuid' } }, required: ['id', 'vendorId'] }
+      fastify.get('/:id/threads', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await chat.customerThreads(request.user.id, request.params.id))))
+      fastify.get('/:id/threads/:vendorId', { preHandler: auth, schema: { params: threadParams } }, wrap(async (request) => ok(await chat.customerThread(request.user.id, request.params.id, request.params.vendorId))))
+      fastify.post('/:id/threads/:vendorId/messages', { preHandler: auth, schema: { params: threadParams } },
+        wrap(async (request) => ok(await chat.customerSend(request.user.id, request.params.id, request.params.vendorId, request.body?.body))))
       fastify.post('/:id/fulfilment', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await journey.bookFulfilment(request.user.id, request.params.id, request.body || {}))))
       fastify.get('/:id/journey', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await journey.getJourney(request.user.id, request.params.id))))
       fastify.post('/:id/payout', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await journey.choosePayout(request.user.id, request.params.id, request.body || {}))))
@@ -288,6 +296,8 @@ function manageRoutes(scopeKind) {
 
     fastify.post('/:id/offers', { preHandler: pre(vendorOnly), schema: params }, wrap(async (request) =>
       ok(await svc.placeOffer(actorOf(request), request.params.id, request.body || {}))))
+    fastify.get('/:id/messages', { preHandler: pre(vendorOnly), schema: params }, wrap(async (request) => ok(await chat.vendorThread(actorOf(request), request.params.id))))
+    fastify.post('/:id/messages', { preHandler: pre(vendorOnly), schema: params }, wrap(async (request) => ok(await chat.vendorSend(actorOf(request), request.params.id, request.body?.body))))
     fastify.delete('/:id/offers', { preHandler: pre(vendorOnly), schema: params }, wrap(async (request) =>
       ok(await svc.withdrawOffer(actorOf(request), request.params.id))))
   }

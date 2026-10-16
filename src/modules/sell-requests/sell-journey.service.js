@@ -160,18 +160,22 @@ export async function listOffersForCustomer(userId, id) {
                                  MIN(concat_ws(', ', address_line1, city, pincode)) AS address
                             FROM shops WHERE vendor_id = o.vendor_id AND deleted_at IS NULL AND is_active) s ON TRUE
       WHERE o.request_id = $1 AND o.status IN ('OPEN', 'ACCEPTED') ORDER BY o.amount DESC, o.created_at`, [id])
+  const { rows: un } = await query(
+    `SELECT vendor_id, COUNT(*)::int AS n FROM sell_request_messages WHERE request_id = $1 AND sender_role = 'VENDOR' AND customer_read_at IS NULL GROUP BY vendor_id`, [id])
+  const unread = new Map(un.map((x) => [x.vendor_id, x.n]))
   const open = offerOpen(r)
   const best = rows.length ? Math.max(...rows.map((o) => Number(o.amount))) : null
   return {
     requestId: id, code: r.code, status: r.status, stage: r.stage,
     estimate: { min: num(r.estimate_min), max: num(r.estimate_max), quote: num(r.quote) },
+    askingPrice: num(r.expected_price),
     offersCloseAt: iso(r.offers_close_at), open: open && !r.assigned_vendor_id, refreshesLeft: await refreshesLeft(r),
     best,
     offers: rows.map((o) => ({
       id: o.id, vendorId: o.vendor_id, vendorName: o.shop_name || o.vendor_name, city: o.city || null, rating: Number(o.rating || 0),
       distanceKm: num(o.distance_km), amount: num(o.amount), note: o.note || undefined, status: o.status,
       best: Number(o.amount) === best && rows.length > 1, address: o.status === 'ACCEPTED' ? o.address : undefined,
-      updatedAt: iso(o.updated_at),
+      updatedAt: iso(o.updated_at), unread: unread.get(o.vendor_id) || 0,
     })),
   }
 }

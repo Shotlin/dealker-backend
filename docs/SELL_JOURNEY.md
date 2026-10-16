@@ -37,3 +37,13 @@ A customer can only sell to **verified, active vendors** (buyers). There is no c
 
 ## Settings (`PUT /manage/sell-requests/settings`)
 `offerWindowMinutes`, `maxOfferRefreshes`, `estimateSpreadPct`, `requireVendorFunding`, `pickupEnabled`, `dropoffEnabled`, `payoutWalletEnabled`, `payoutUpiEnabled`, `payoutBankEnabled`.
+
+## Negotiation (migration 209)
+The customer **names their own price** (`expectedPrice` on `POST /sell-requests`; the estimate is only a suggestion; above 2× the model's base price → `ASKING_PRICE_TOO_HIGH`). Buyers offer, then the two sides talk before the customer accepts — one thread per (request, vendor), table `sell_request_messages`.
+
+| Who | Endpoint |
+|---|---|
+| Customer | `GET /sell-requests/:id/threads` (buyers who offered or wrote, last line, unread) · `GET /:id/threads/:vendorId` (marks read) · `POST /:id/threads/:vendorId/messages {body}` |
+| Vendor | `GET /manage/sell-requests/:id/messages` · `POST …/messages {body}` (may start a thread without an offer) |
+
+Rules: max 1000 chars, 300 messages per thread; closed when another buyer's offer is accepted or the sale ends (`THREAD_CLOSED`); phone numbers are blocked until an offer is accepted (`NO_CONTACT_DETAILS`); the customer appears to vendors only as "Seller"; the other side gets a push (`sell_request:message_from_vendor|customer`). `GET /mine` rows carry `askingPrice, imageUrl, offerCount, bestOffer, unreadMessages`; `/offers` carries `askingPrice` and per-offer `unread`. Landing artwork: `hubBannerUrl` / `hubStepIcons` (3 URLs) in `journey-config` and `PUT /manage/sell-requests/settings`. Vendor-side chat UI is not built yet.

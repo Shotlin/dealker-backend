@@ -98,7 +98,36 @@ export class ProductsService {
    * @param {{ userId?: string }|null|undefined} customerContext
    * @returns {Promise<string[]|null>}
    */
+  /**
+   * Vendor shops that currently sell at least one customer-visible (approved,
+   * active, B2C, nationwide) listing. Customers are only ever allocated the
+   * platform shop, so without these ids vendor products never reach the app.
+   * The repository gates each row on the same listing conditions, so adding a
+   * shop here can never expose a pending/paused/B2B-only listing. Cached 60s.
+   */
+  async _marketplaceShopIds() {
+    const key = "products:marketplace-shops:v1";
+    const cached = await cacheGet(key);
+    if (Array.isArray(cached)) return cached;
+    let ids = [];
+    try {
+      ids = await this.repo.findMarketplaceShopIds();
+    } catch (err) {
+      logger.error({ err: err.message }, "products.marketplace_shops failed");
+      return [];
+    }
+    await cacheSet(key, ids, 60);
+    return ids;
+  }
+
   async _resolveAllocatedShopIds(customerContext) {
+    const base = await this._resolveBaseShopIds(customerContext);
+    if (!Array.isArray(base) || base.length === 0) return base;
+    const extra = await this._marketplaceShopIds();
+    return extra.length ? [...new Set([...base, ...extra])] : base;
+  }
+
+  async _resolveBaseShopIds(customerContext) {
     if (Array.isArray(customerContext?.shopIds)) return customerContext.shopIds;
     if (!customerContext || !customerContext.userId) return null;
     try {

@@ -69,6 +69,7 @@ export function buildCustomerVisibilitySnippet(allocatedShopIds, params, startId
          AND sp.deleted_at IS NULL
          AND s.is_active = true
          AND s.deleted_at IS NULL
+         AND (s.vendor_id IS NULL OR (sp.approval_status = 'APPROVED' AND sp.listing_status = 'ACTIVE' AND sp.sell_b2c = TRUE AND sp.nationwide_shipping_enabled = TRUE))
     )`,
     nextIdx: startIdx + 1,
   }
@@ -121,9 +122,11 @@ export function buildShopPriceJoin(allocatedShopIds, params, startIdx, priceMode
              sp.wholesale_price AS sp_wholesale_price,
              sp.stock_quantity AS sp_stock_quantity
         FROM shop_products sp
+        JOIN shops s ON s.id = sp.shop_id
        WHERE sp.product_id = p.id
          AND sp.shop_id = ANY($${idx}::uuid[])
          AND sp.is_available = true AND sp.deleted_at IS NULL
+         AND (s.vendor_id IS NULL OR (sp.approval_status = 'APPROVED' AND sp.listing_status = 'ACTIVE' AND sp.sell_b2c = TRUE AND sp.nationwide_shipping_enabled = TRUE))
        ORDER BY COALESCE(sp.sale_price, sp.price) ASC
        LIMIT 1
     ) shop_price ON true`,
@@ -1166,6 +1169,19 @@ export class ProductsRepository {
    * @param {string[]} shopIds
    * @returns {Promise<Record<string, object>>}
    */
+  async findMarketplaceShopIds() {
+    const { rows } = await query(
+      `SELECT DISTINCT sp.shop_id
+         FROM shop_products sp
+         JOIN shops s ON s.id = sp.shop_id
+        WHERE s.vendor_id IS NOT NULL AND s.is_active = true AND s.deleted_at IS NULL
+          AND sp.deleted_at IS NULL AND sp.is_available = true
+          AND sp.approval_status = 'APPROVED' AND sp.listing_status = 'ACTIVE'
+          AND sp.sell_b2c = TRUE AND sp.nationwide_shipping_enabled = TRUE`
+    )
+    return rows.map((r) => r.shop_id)
+  }
+
   async _fetchShopDataForProducts(productIds, shopIds) {
     if (!productIds.length || !shopIds.length) return {}
 
@@ -1182,6 +1198,7 @@ export class ProductsRepository {
         AND sp.deleted_at IS NULL
         AND s.is_active = true
         AND s.deleted_at IS NULL
+        AND (s.vendor_id IS NULL OR (sp.approval_status = 'APPROVED' AND sp.listing_status = 'ACTIVE' AND sp.sell_b2c = TRUE AND sp.nationwide_shipping_enabled = TRUE))
       ORDER BY sp.product_id, sp.stock_quantity DESC`,
       [productIds, shopIds]
     )

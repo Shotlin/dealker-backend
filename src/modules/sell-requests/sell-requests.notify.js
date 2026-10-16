@@ -77,6 +77,8 @@ const COPY = {
     v: (r) => ({ to: 'OFFERED', title: 'Request closed', body: `${r.code} · ${r.model_name} was rejected.` }),
   },
   OFFER_ACCEPTED: { v: (r) => ({ to: 'ASSIGNED', title: 'Your offer was accepted', body: `${r.code} · ${r.model_name} at ${rupees(r.final_price)}. Pay to confirm the purchase.` }) },
+  MESSAGE_FROM_VENDOR: { c: (r, x) => ({ title: `New message about your ${r.model_name}`, body: String(x.preview || '').slice(0, 90) }) },
+  MESSAGE_FROM_CUSTOMER: { v: (r, x) => ({ to: 'THREAD', title: `Seller replied · ${r.code}`, body: String(x.preview || '').slice(0, 90) }) },
   OFFERS_REFRESHED: { v: (r) => ({ to: 'ALL_ACTIVE', title: 'Offers reopened', body: `${r.model_name} ${r.variant} — place or update your offer.` }) },
   FULFILMENT_BOOKED: { v: (r) => ({ to: 'ASSIGNED', title: r.fulfilment === 'DROP_OFF' ? 'Customer will drop the phone off' : 'Pickup requested', body: `${r.code} · ${r.model_name}${r.pickup_date ? ` on ${new Date(r.pickup_date).toLocaleDateString('en-IN')}` : ''}.` }) },
   VENDOR_FUNDED: { c: (r) => ({ title: 'Buyer has paid', body: `${r.code}: the buyer's payment of ${rupees(r.final_price)} is secured. Your pickup will be arranged next.` }) },
@@ -132,6 +134,8 @@ export function notifySellEvent(kind, requestId, extra = {}) {
             `SELECT vendor_id FROM sell_request_offers WHERE request_id = $1 AND status <> 'WITHDRAWN'`, [requestId])
           vendorIds = o.map((x) => x.vendor_id).filter((id) => id !== r.assigned_vendor_id || kind !== 'OFFER_DECLINED')
           if (kind === 'OFFER_DECLINED') vendorIds = extra.declinedVendorIds || []
+        } else if (v.to === 'THREAD') {
+          vendorIds = extra.vendorId ? [extra.vendorId] : []
         } else if (v.to === 'ALL_ACTIVE') {
           const { rows: a } = await query(
             `SELECT id FROM vendors WHERE is_active AND status IN ('VERIFIED','ACTIVE') AND deleted_at IS NULL ORDER BY created_at LIMIT $1`,

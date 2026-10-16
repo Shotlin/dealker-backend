@@ -251,7 +251,35 @@ export class CartRepository {
         ORDER BY a.is_primary DESC, a.distance_km ASC NULLS LAST`,
       [userId, productId]
     )
-    return rows
+    if (rows.length > 0) return rows
+
+    // Nothing in the customer's own storefront carries it: a vendor's approved,
+    // active, B2C, nationwide listing is still purchasable (see MARKETPLACE_LISTING).
+    const { rows: market } = await query(
+      `SELECT sp.id            AS shop_product_id,
+              sp.shop_id,
+              sp.product_id,
+              sp.price         AS sp_price,
+              sp.sale_price    AS sp_sale_price,
+              sp.wholesale_price AS sp_wholesale_price,
+              sp.stock_quantity,
+              sp.max_order_qty,
+              sp.is_available,
+              s.name           AS shop_name,
+              false            AS is_primary,
+              NULL::numeric    AS distance_km
+         FROM shop_products sp
+         JOIN shops s ON s.id = sp.shop_id
+        WHERE sp.product_id  = $1
+          AND sp.deleted_at IS NULL
+          AND sp.is_available = true
+          AND s.is_active    = true
+          AND s.deleted_at  IS NULL
+          AND ${MARKETPLACE_LISTING}
+        ORDER BY COALESCE(sp.sale_price, sp.price) ASC`,
+      [productId]
+    )
+    return market
   }
 
   /**
