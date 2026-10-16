@@ -249,6 +249,15 @@ async function activateLocked(client, a, post, actor = {}) {
         data: { event: 'auction:started', auction_id: a.id },
       })
     }
+    // Customers who asked to hear about every new auction ("Notify me"); watchers were already told above.
+    if (a.audience === 'B2C') {
+      const { rows: opted } = await query(
+        `SELECT u.id FROM users u WHERE u.is_active = TRUE AND u.notification_preferences->>'auctionAlerts' = 'true'
+            AND NOT EXISTS (SELECT 1 FROM auction_watchers w WHERE w.auction_id = $1 AND w.user_id = u.id) LIMIT 2000`, [a.id])
+      for (const r of opted) {
+        await notifyUser(r.id, { title: 'New auction is live', body: `${a.title} — bidding has started.`, data: { event: 'auction:started', auction_id: a.id } })
+      }
+    }
   })
   return true
 }

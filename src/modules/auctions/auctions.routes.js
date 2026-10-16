@@ -61,11 +61,14 @@ export async function auctionsRoutes(fastify) {
   }))
 
   fastify.get('/', { preHandler: optionalAuth }, wrap(async (request) => {
-    const { tab = 'live', q = '', categoryId = null, page = 1, limit = 20 } = request.query || {}
+    const { tab = 'live', q = '', categoryId = null, brand = '', min = null, max = null, registration = '', sort = '', page = 1, limit = 20 } = request.query || {}
     return bidding.listPublic(request.user?.id ?? null, {
-      tab, q: String(q).slice(0, 100), categoryId, page: Math.max(1, Number(page)), limit: Math.min(50, Number(limit) || 20),
+      tab, q: String(q).slice(0, 100), categoryId, brand: String(brand || ''), min: min === '' ? null : min, max: max === '' ? null : max,
+      registration: String(registration || ''), sort: String(sort || ''), page: Math.max(1, Number(page)), limit: Math.min(50, Number(limit) || 20),
     })
   }))
+
+  fastify.get('/watching', { preHandler: auth }, wrap(async (request) => bidding.listWatching(request.user.id, { limit: Math.min(100, Number(request.query?.limit) || 50) })))
 
   fastify.get('/mine', { preHandler: auth }, wrap(async (request) => {
     const { tab = 'active', page = 1, limit = 20 } = request.query || {}

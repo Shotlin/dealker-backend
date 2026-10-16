@@ -68,6 +68,7 @@ export const updatePreferencesSchema = {
       newProducts: { type: 'boolean' },
       deliveryUpdates: { type: 'boolean' },
       priceDrops: { type: 'boolean' },
+      auctionAlerts: { type: 'boolean' },
     },
   },
 }

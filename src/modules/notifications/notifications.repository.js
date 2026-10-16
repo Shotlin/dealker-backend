@@ -86,12 +86,14 @@ export class NotificationsRepository {
       newProducts: prefs.newProducts !== false,
       deliveryUpdates: prefs.deliveryUpdates !== false,
       priceDrops: prefs.priceDrops !== false,
+      // Opt-in: told when ANY new auction goes live (watching one auction always notifies regardless).
+      auctionAlerts: prefs.auctionAlerts === true,
     }
   }
 
   async updatePreferences(userId, preferences) {
     const { rows } = await query(
-      'UPDATE users SET notification_preferences = $1 WHERE id = $2 RETURNING notification_preferences',
+      "UPDATE users SET notification_preferences = COALESCE(notification_preferences, '{}'::jsonb) || $1::jsonb WHERE id = $2 RETURNING notification_preferences",
       [JSON.stringify(preferences), userId]
     )
     return rows[0].notification_preferences

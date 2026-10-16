@@ -132,33 +132,79 @@ async function audienceFor(userId) {
   return rows[0] ? 'B2B' : 'B2C'
 }
 
-export async function listPublic(userId, { tab = 'live', q = '', categoryId = null, page = 1, limit = 20 } = {}) {
+const SORTS = {
+  ending: 'a.ends_at ASC',
+  new: 'a.starts_at DESC',
+  price_asc: 'a.current_price ASC, a.ends_at ASC',
+  price_desc: 'a.current_price DESC, a.ends_at ASC',
+  bids: 'a.bid_count DESC, a.ends_at ASC',
+}
+const TAB_WHERE = {
+  live: `a.status IN ('LIVE','PAUSED')`,
+  upcoming: `a.status = 'SCHEDULED'`,
+  ended: `a.status IN ('AWAITING_PAYMENT','SOLD','UNSOLD') AND a.ended_at > NOW() - INTERVAL '7 days'`,
+}
+
+/**
+ * Browse auctions. Besides the rows it returns what the Auctions page needs in one call:
+ * `counts` (live / upcoming / ended / watching for the tab badges) and `facets.brands` for the current tab.
+ * Filters: q, categoryId, brand, min/max (current price), registration=open (not registered yet), sort.
+ */
+export async function listPublic(userId, { tab = 'live', q = '', categoryId = null, brand = '', min = null, max = null, registration = '', sort = '', page = 1, limit = 20 } = {}) {
+  const audience = await audienceFor(userId)
+  const tabKey = TAB_WHERE[tab] ? tab : 'live'
   const where = []
-  const params = []
-  let order = 'a.ends_at ASC'
-  params.push(await audienceFor(userId)); where.push(`a.audience = $${params.length}`)
-  if (tab === 'upcoming') { where.push(`a.status = 'SCHEDULED'`); order = 'a.starts_at ASC' }
-  else if (tab === 'ended') {
-    where.push(`a.status IN ('AWAITING_PAYMENT','SOLD','UNSOLD') AND a.ended_at > NOW() - INTERVAL '7 days'`)
-    order = 'a.ended_at DESC'
-  } else where.push(`a.status IN ('LIVE','PAUSED')`)
+  const params = [audience]
+  where.push('a.audience = $1', TAB_WHERE[tabKey])
   if (q) { params.push(`%${q}%`); where.push(`a.title ILIKE $${params.length}`) }
   if (categoryId) {
     params.push(categoryId)
     where.push(`EXISTS (SELECT 1 FROM products p WHERE p.id = a.product_id AND p.category_id = $${params.length})`)
   }
+  const baseWhere = where.join(' AND ') // facets ignore brand/price/registration so the chips never vanish
+  const baseParams = [...params]
+  if (brand) {
+    params.push(String(brand).slice(0, 80))
+    where.push(`EXISTS (SELECT 1 FROM products p WHERE p.id = a.product_id AND lower(p.brand) = lower($${params.length}))`)
+  }
+  if (min != null && Number.isFinite(Number(min))) { params.push(Number(min)); where.push(`a.current_price >= $${params.length}`) }
+  if (max != null && Number.isFinite(Number(max))) { params.push(Number(max)); where.push(`a.current_price <= $${params.length}`) }
+  if (registration === 'open' && ['live', 'upcoming'].includes(tabKey)) {
+    if (userId) { params.push(userId); where.push(`NOT EXISTS (SELECT 1 FROM auction_registrations r WHERE r.auction_id = a.id AND r.user_id = $${params.length})`) }
+  }
+  const order = tabKey === 'upcoming' ? 'a.starts_at ASC' : tabKey === 'ended' ? 'a.ended_at DESC' : (SORTS[sort] || SORTS.ending)
   const offset = (Math.max(1, page) - 1) * limit
+  const filterParams = [...params]
   params.push(limit, offset)
   const sql = `SELECT a.*, v.name AS seller_name FROM auctions a LEFT JOIN vendors v ON v.id = a.vendor_id
                 WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT $${params.length - 1} OFFSET $${params.length}`
-  const countSql = `SELECT COUNT(*)::int AS n FROM auctions a WHERE ${where.join(' AND ')}`
-  const [rows, count] = await Promise.all([query(sql, params), query(countSql, params.slice(0, -2))])
+  const [rows, count, counts, brands, watching] = await Promise.all([
+    query(sql, params),
+    query(`SELECT COUNT(*)::int AS n FROM auctions a WHERE ${where.join(' AND ')}`, filterParams),
+    query(`SELECT COUNT(*) FILTER (WHERE ${TAB_WHERE.live})::int AS live, COUNT(*) FILTER (WHERE ${TAB_WHERE.upcoming})::int AS upcoming,
+                  COUNT(*) FILTER (WHERE ${TAB_WHERE.ended})::int AS ended FROM auctions a WHERE a.audience = $1`, [audience]),
+    query(`SELECT p.brand AS name, COUNT(*)::int AS n FROM auctions a JOIN products p ON p.id = a.product_id
+            WHERE ${baseWhere} AND p.brand IS NOT NULL AND p.brand <> '' GROUP BY p.brand ORDER BY n DESC, p.brand LIMIT 20`, baseParams),
+    userId ? query(`SELECT COUNT(*)::int AS n FROM auction_watchers w JOIN auctions a ON a.id = w.auction_id WHERE w.user_id = $1 AND a.audience = $2 AND a.status IN ('SCHEDULED','LIVE','PAUSED')`, [userId, audience]) : { rows: [{ n: 0 }] },
+  ])
   return {
     success: true,
     data: await hydrate(rows.rows, userId),
     pagination: { page, limit, total: count.rows[0].n },
+    counts: { ...counts.rows[0], watching: watching.rows[0].n },
+    facets: { brands: brands.rows.map((b) => ({ name: b.name, count: b.n })) },
     server_time: new Date().toISOString(),
   }
+}
+
+/** Auctions the user is watching (heart), soonest first. */
+export async function listWatching(userId, { limit = 50 } = {}) {
+  const audience = await audienceFor(userId)
+  const { rows } = await query(
+    `SELECT a.*, v.name AS seller_name FROM auction_watchers w JOIN auctions a ON a.id = w.auction_id LEFT JOIN vendors v ON v.id = a.vendor_id
+      WHERE w.user_id = $1 AND a.audience = $2 AND a.status IN ('SCHEDULED','LIVE','PAUSED') ORDER BY COALESCE(a.ends_at, a.starts_at) ASC LIMIT $3`,
+    [userId, audience, limit])
+  return { success: true, data: await hydrate(rows, userId), server_time: new Date().toISOString() }
 }
 
 export async function getPublic(userId, auctionId) {
@@ -187,7 +233,9 @@ export async function listBids(userId, auctionId, { limit = 50 } = {}) {
 }
 
 export async function mine(userId, { tab = 'active', page = 1, limit = 20 } = {}) {
-  const cond = tab === 'won'
+  const cond = tab === 'all'
+    ? `a.status IN ('SCHEDULED','LIVE','PAUSED','AWAITING_PAYMENT','SOLD','UNSOLD')`
+    : tab === 'won'
     ? `a.winner_id = $1 AND a.status IN ('AWAITING_PAYMENT','SOLD')`
     : tab === 'past'
       ? `a.status IN ('SOLD','UNSOLD','CANCELLED','DEFAULTED','AWAITING_PAYMENT')`
