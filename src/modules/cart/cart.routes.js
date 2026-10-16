@@ -50,6 +50,15 @@ export default async function cartRoutes(fastify) {
     schema: getCartSummarySchema,
   }, controller.getSummary.bind(controller))
 
+  // GET /points — Dealker Points preview for this cart
+  fastify.get('/points', {
+    schema: {
+      tags: ['Cart'],
+      summary: 'Dealker Points: balance, redeemable on this cart, points this order would earn',
+      querystring: { type: 'object', properties: { couponDiscount: { type: 'number', minimum: 0 }, priceMode: { type: 'string' } } },
+    },
+  }, controller.getPoints.bind(controller))
+
   // GET /quick-add — "Quick Add" rail suggestions based on cart contents
   fastify.get('/quick-add', {
     schema: getQuickAddSchema,

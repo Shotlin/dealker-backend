@@ -140,6 +140,31 @@ export class LoyaltyService {
     return { maxPoints: Math.max(0, maxPoints), pointValue, settings }
   }
 
+  /**
+   * What the cart screen shows for Dealker Points: the redeemable balance, how many points this cart may
+   * redeem (same clamp the order applies), and the points the order would earn. Nothing is stored.
+   * `couponDiscount` (client-reported, only ever shrinks the redeemable value) is subtracted first, exactly like checkout.
+   */
+  async cartPreview(customerId, { subtotal = 0, couponDiscount = 0 } = {}) {
+    const settings = await this.getSettings()
+    if (!settings.enabled) return { enabled: false, balance: 0, pending: 0, pointValue: 1, minRedeemable: 0, maxRedemptionPct: 0, maxPoints: 0, earnEstimate: 0 }
+    const { available, pending } = await this.getBalance(customerId)
+    const eligible = Math.max(0, Number(subtotal || 0) - Math.max(0, Number(couponDiscount || 0)))
+    const { maxPoints, pointValue } = await this.computeMaxRedeemable(customerId, eligible)
+    const earns = eligible >= Number(settings.min_order_amount_to_earn || 0)
+      ? Math.floor(eligible * Number(settings.points_per_rupee || 0)) : 0
+    return {
+      enabled: true,
+      balance: available,
+      pending,
+      pointValue,
+      minRedeemable: Number(settings.min_redeemable_points || 0),
+      maxRedemptionPct: Number(settings.max_redemption_pct || 0),
+      maxPoints,
+      earnEstimate: Math.max(0, earns),
+    }
+  }
+
   // ── Ledger ops ────────────────────────────────────────────────────────
 
   async #appendLedger(client, { accountId, type, points, idempotencyKey, referenceId = null, orderId = null, availableAt = null, expiresAt = null }) {

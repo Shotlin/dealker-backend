@@ -33,6 +33,8 @@ export const PlaceMobileOrderSchema = {
     scheduledSlotLabel: { type: 'string', maxLength: 100 },
     quickDeliverySelected: { type: 'boolean' },
     useWallet: { type: 'boolean' },
+    // Dealker Points to spend on this order; the server clamps it to the balance and the admin redemption cap.
+    loyaltyPointsToRedeem: { type: 'integer', minimum: 0 },
     // Idempotency key — one per checkout attempt, reused only when the
     // mobile app retries that exact same attempt. See
     // OrdersService#placeOrder's doc comment.

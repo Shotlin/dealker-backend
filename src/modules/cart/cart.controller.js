@@ -26,6 +26,17 @@ export class CartController {
     return reply.code(200).send(success(summary, 'Bill summary fetched'))
   }
 
+  /** GET /points — Dealker Points preview for the current cart (balance, redeemable now, earn estimate) */
+  async getPoints(request, reply) {
+    const cart = await this.service.getCart(request.user.id, request.query?.priceMode)
+    const { LoyaltyService } = await import('../loyalty/loyalty.service.js')
+    const data = await new LoyaltyService().cartPreview(request.user.id, {
+      subtotal: cart.subtotal,
+      couponDiscount: Number(request.query?.couponDiscount) || 0,
+    })
+    return reply.code(200).send(success(data, 'Points preview'))
+  }
+
   /** GET /quick-add — "Quick Add" rail suggestions based on cart contents */
   async getQuickAdd(request, reply) {
     const limit = Math.min(Math.max(Number(request.query?.limit) || 12, 1), 20)
