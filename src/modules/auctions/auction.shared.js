@@ -127,6 +127,8 @@ export function serializePublic(a, ctx = {}) {
     description: a.description,
     image_url: a.image_url,
     images: a.images || [],
+    video_url: a.video_url || null,
+    qc_report: a.qc_report || null,
     status: a.status,
     audience: a.audience || 'B2C',
     quantity: Number(a.quantity || 1),

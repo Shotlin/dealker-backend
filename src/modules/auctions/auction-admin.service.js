@@ -52,8 +52,8 @@ export async function searchProducts(actor, { q = '', limit = 20 } = {}) {
   if (q) { params.push(`%${q}%`); where.push(`p.name ILIKE $${params.length}`) }
   params.push(Math.min(50, limit))
   const { rows } = await query(
-    `SELECT DISTINCT ON (p.id) p.id, p.name, p.brand, p.price, p.sale_price, p.thumbnail_url, p.images, p.owner_type,
-            p.owner_vendor_id, v.name AS vendor_name, sp.id AS shop_product_id, sp.shop_id, sp.stock_quantity
+    `SELECT DISTINCT ON (p.id) p.id, p.name, p.brand, p.price, p.sale_price, p.thumbnail_url, p.images, p.video_url, p.owner_type,
+            p.owner_vendor_id, v.name AS vendor_name, sp.id AS shop_product_id, sp.shop_id, sp.stock_quantity, sp.vendor_qc
        FROM products p
        JOIN shop_products sp ON sp.product_id = p.id
        LEFT JOIN vendors v ON v.id = p.owner_vendor_id
@@ -62,7 +62,7 @@ export async function searchProducts(actor, { q = '', limit = 20 } = {}) {
       LIMIT $${params.length}`,
     params
   )
-  return rows
+  return rows.map(({ vendor_qc: vq, ...r }) => ({ ...r, qc_report: qcFromProduct(vq) }))
 }
 
 // ── validation ──────────────────────────────────────────────────────────
@@ -108,6 +108,34 @@ function normalise(input, settings, base = null) {
   return { startPrice, reservePrice, bidIncrement, buyNow, fee, startsAt, endsAt }
 }
 
+/**
+ * Keep only what the apps render: `checklist` (item → condition text), `checks` (item → ticked),
+ * photo URLs and a short note.
+ */
+function cleanQc(v) {
+  if (!v || typeof v !== 'object') return null
+  const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.entries(x).slice(0, 30) : [])
+  const checklist = {}
+  for (const [k, val] of obj(v.checklist)) if (['string', 'number'].includes(typeof val)) checklist[String(k).slice(0, 80)] = String(val).slice(0, 120)
+  const checks = {}
+  for (const [k, val] of obj(v.checks)) checks[String(k).slice(0, 80)] = val === true
+  const photos = (Array.isArray(v.photos) ? v.photos : []).filter((u) => typeof u === 'string' && u.length <= 2048).slice(0, 12)
+  const notes = typeof v.notes === 'string' ? v.notes.trim().slice(0, 1000) : ''
+  if (!Object.keys(checklist).length && !Object.keys(checks).length && !photos.length && !notes) return null
+  return { checklist, checks, photos, notes }
+}
+
+/** The product's own vendor checklist (shop_products.vendor_qc) mapped to the auction QC shape. */
+function qcFromProduct(vq) {
+  if (!vq || typeof vq !== 'object') return null
+  return cleanQc({
+    checklist: vq.checklist,
+    checks: vq.videoChecks,
+    photos: (Array.isArray(vq.photoAngles) ? vq.photoAngles : []).map((x) => x?.url),
+    notes: vq.photoNote,
+  })
+}
+
 const genNumber = () => `AU-${new Date().toISOString().slice(2, 10).replaceAll('-', '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`
 
 // ── create / update ─────────────────────────────────────────────────────
@@ -118,7 +146,7 @@ export async function createAuction(actor, input) {
   if (!input.productId) throw new AuctionError('VALIDATION', 'Choose a product', 422)
 
   const { rows: prod } = await query(
-    `SELECT p.id, p.name, p.description, p.thumbnail_url, p.images, p.owner_type, p.owner_vendor_id
+    `SELECT p.id, p.name, p.description, p.thumbnail_url, p.images, p.video_url, p.owner_type, p.owner_vendor_id
        FROM products p WHERE p.id = $1 AND p.is_active = TRUE`, [input.productId]
   )
   const p = prod[0]
@@ -129,7 +157,7 @@ export async function createAuction(actor, input) {
   if (dup[0]) throw new AuctionError('PRODUCT_ALREADY_IN_AUCTION', 'This product already has an active auction', 409)
 
   const { rows: sp } = await query(
-    `SELECT id, shop_id, stock_quantity FROM shop_products
+    `SELECT id, shop_id, stock_quantity, vendor_qc FROM shop_products
       WHERE product_id = $1 AND deleted_at IS NULL ORDER BY stock_quantity DESC LIMIT 1`, [p.id]
   )
   if (!sp[0]) throw new AuctionError('PRODUCT_NOT_LISTED', 'This product is not listed in any shop', 409)
@@ -178,8 +206,8 @@ export async function createAuction(actor, input) {
            title, description, image_url, images, status, start_price, reserve_price, bid_increment, increment_tiers, buy_now_price,
            registration_fee, fee_vendor_share_pct, loser_fee_refund_pct, anti_snipe_window_sec, anti_snipe_extend_sec,
            max_extensions, payment_window_hours, max_offer_rounds, starts_at, ends_at, original_ends_at, current_price, relisted_from,
-           audience, quantity, eligible_vendor_ids)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$28,$14,$29,$30,$31,$32)
+           audience, quantity, eligible_vendor_ids, video_url, qc_report)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$28,$14,$29,$30,$31,$32,$33,$34)
          RETURNING *`,
         [
           genNumber(), p.id, sp[0].id, sp[0].shop_id, p.owner_vendor_id || null, p.owner_type, actor.userId, actor.kind,
@@ -194,6 +222,8 @@ export async function createAuction(actor, input) {
           admin && input.paymentWindowHours != null ? Number(input.paymentWindowHours) : settings.payment_window_hours,
           settings.max_offer_rounds, n.startsAt, n.endsAt, input.relistedFrom || null,
           audience, quantity, eligibleVendors,
+          input.videoUrl !== undefined ? (input.videoUrl ? String(input.videoUrl).slice(0, 2048) : null) : (p.video_url || null),
+          input.qcReport !== undefined ? cleanQc(input.qcReport) : qcFromProduct(sp[0].vendor_qc),
         ]
       )
       row = rows[0]
@@ -235,6 +265,8 @@ export async function updateAuction(actor, id, input) {
     if (input.description !== undefined) set('description', input.description)
     if (input.imageUrl !== undefined) set('image_url', input.imageUrl)
     if (input.images !== undefined) set('images', JSON.stringify(input.images))
+    if (input.videoUrl !== undefined) set('video_url', input.videoUrl ? String(input.videoUrl).slice(0, 2048) : null)
+    if (input.qcReport !== undefined) set('qc_report', cleanQc(input.qcReport))
     if (input.quantity !== undefined) {
       const qty = Number(input.quantity)
       if (a.audience !== 'B2B' && qty !== 1) throw new AuctionError('VALIDATION', 'Customer auctions sell one unit', 422)
@@ -418,7 +450,7 @@ export async function relist(actor, id, { startsAt, endsAt, durationHours } = {}
     throw new AuctionError('INVALID_STATE', 'Only a finished, unsold auction can be relisted', 409)
   }
   return createAuction(actor, {
-    productId: a.product_id, title: a.title, description: a.description, imageUrl: a.image_url, images: a.images,
+    productId: a.product_id, title: a.title, description: a.description, imageUrl: a.image_url, images: a.images, videoUrl: a.video_url, qcReport: a.qc_report,
     startPrice: Number(a.start_price), reservePrice: a.reserve_price == null ? undefined : Number(a.reserve_price),
     bidIncrement: a.bid_increment == null ? undefined : Number(a.bid_increment),
     buyNowPrice: a.buy_now_price == null ? undefined : Number(a.buy_now_price),
