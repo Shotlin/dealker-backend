@@ -85,6 +85,7 @@ const COPY = {
   PICKUP_SCHEDULED: { c: (r) => ({ title: 'Pickup scheduled', body: `${r.code}: the pickup for your ${r.model_name} is arranged. Keep the phone ready.` }) },
   PICKED_UP: { c: (r) => ({ title: 'Phone picked up', body: `${r.code}: your ${r.model_name} has been picked up.` }) },
   IN_TRANSIT: { c: (r) => ({ title: 'On its way to the buyer', body: `${r.code}: your ${r.model_name} is in transit.` }) },
+  STORE_CLOSED: { c: (r) => ({ title: 'Delivery to the buyer will be retried', body: `${r.code}: the buyer's store was closed. The delivery partner will try again; you do not need to do anything.` }) },
   RECEIVED: { c: (r) => ({ title: 'Phone received', body: `${r.code}: the buyer has your ${r.model_name} and will inspect it now.` }) },
   PRICE_REVISED: { c: (r) => ({ title: 'Price changed after inspection', body: `${r.code}: please review the new price in the app.` }) },
   FINAL_PRICE_APPROVED: { c: (r) => ({ title: 'Final price approved', body: `${r.code}: ${rupees(r.payout_amount ?? r.final_price)} is ready. Choose how you want to be paid.` }) },

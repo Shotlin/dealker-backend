@@ -116,6 +116,7 @@ d('sell journey', () => {
     await q(`UPDATE sell_settings SET enabled = TRUE, require_vendor_funding = TRUE, offer_window_minutes = 60, max_offer_refreshes = 2, estimate_spread_pct = 8,
              pickup_enabled = TRUE, dropoff_enabled = TRUE, qc_required_for_approval = FALSE WHERE id = TRUE`)
     await q(`DELETE FROM app_settings WHERE key = 'wallet_max_balance'`).catch(() => {})
+    await q(`UPDATE shiprocket_settings SET simulation_mode = FALSE`).catch(() => {})   // these tests book the courier by hand
     await q(`UPDATE vendors SET is_active = FALSE WHERE slug LIKE 'sj-%'`)
     T.admin = await mkToken('ADMIN', 'Admin')
     T.cust = await mkToken('CUSTOMER', 'Rahul Sharma')
@@ -263,7 +264,7 @@ d('sell journey', () => {
       expect((await call('POST', `${M}/${a.id}/pickup`, T.winner, { provider: 'SHIPROCKET', trackingUrl: 'javascript:alert(1)' })).status).toBe(422)
       expect((await call('POST', `${M}/${a.id}/received`, T.winner)).data.stage).toBe('RECEIVED')   // allowed (self handover) — but we continue the courier path on a fresh request below
       const j = (await call('GET', `${S}/${a.id}/journey`, T.cust)).data
-      expect(j.steps.map((s) => s.label)).toEqual(['Offer Accepted', 'Pickup Scheduled', 'Device Picked Up', 'In Transit', 'Received by Buyer', 'Inspection', 'Final Price Approved', 'Payment Sent'])
+      expect(j.steps.map((s) => s.label)).toEqual(['Offer Accepted', 'Buyer Paid', 'Pickup Scheduled', 'Device Picked Up', 'In Transit', 'Received by Buyer', 'Inspection', 'Final Price Approved', 'Payment Sent'])
       expect(j.pickup).toMatchObject({ provider: 'SHIPROCKET', courier: 'Delhivery', trackingUrl: 'https://track.example.com/x', awb })
       expect(JSON.stringify(j)).not.toMatch(/"lat"|"lng"|rider/i)
     })
@@ -402,7 +403,7 @@ d('sell journey', () => {
       const b = await call('POST', `${S}/${a.id}/fulfilment`, T.cust, { fulfilment: 'DROP_OFF' })
       expect(b.status, JSON.stringify(b.body)).toBe(200)
       expect(b.data.buyer.address).toMatch(/Main Rd/)
-      expect(b.data.steps.map((s) => s.label)).toEqual(['Offer Accepted', 'Drop-off Chosen', 'Received at Store', 'Inspection', 'Final Price Approved', 'Payment Sent'])
+      expect(b.data.steps.map((s) => s.label)).toEqual(['Offer Accepted', 'Drop-off Chosen', 'Buyer Paid', 'Received at Store', 'Inspection', 'Final Price Approved', 'Payment Sent'])
       expect((await call('POST', `${M}/${a.id}/received`, T.winner)).body.code).toBe('VENDOR_NOT_FUNDED')
       await fund(a.id)
       expect((await call('POST', `${M}/${a.id}/pickup`, T.winner, { provider: 'SELF' })).status).toBe(409)   // pickup is only for PICKUP bookings

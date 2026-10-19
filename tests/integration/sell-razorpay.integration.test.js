@@ -348,4 +348,65 @@ d('sell razorpay', () => {
       } finally { env.RAZORPAYX_ACCOUNT_NUMBER = saved }
     })
   })
+
+  describe('automatic pickup after the buyer pays', () => {
+    const setSim = (on) => q(`INSERT INTO shiprocket_settings (simulation_mode) VALUES ($1) ON CONFLICT ((1)) DO UPDATE SET simulation_mode = $1, api_email = NULL, api_password_encrypted = NULL`, [on])
+    const payOnline = async (id) => { const o = (await fundOrder(id)).data; await verify(id, o.orderId, pay(o.orderId)) }
+    const events = async (id) => (await q(`SELECT kind FROM sell_request_events WHERE request_id = $1 ORDER BY id`, [id])).rows.map((x) => x.kind)
+
+    it('demo mode: pickup is booked the moment the buyer pays, then stepped to the store', async () => {
+      await setSim(true)
+      const a = await accepted()
+      await bookPickup(a.id)                         // customer chose home pickup first
+      expect((await mgmt(a.id)).pickup).toBeNull()   // nothing before payment
+      await payOnline(a.id)
+      const m = await mgmt(a.id)
+      expect(m.stage).toBe('PICKUP_SCHEDULED')
+      expect(m.pickup).toMatchObject({ provider: 'SHIPROCKET', status: 'PICKUP_SCHEDULED', auto: true, simulated: true })
+      expect(m.pickup.awb).toMatch(/^SIM-/)
+      expect(m.steps.find((x) => x.key === 'VENDOR_FUNDED').done).toBe(true)
+      const sim = (st) => call('POST', `${M}/${a.id}/pickup/simulate`, T.winner)
+      expect((await sim()).status).toBe(200)
+      expect((await mgmt(a.id)).pickup.status).toBe('PICKED_UP')
+      expect((await sim()).status).toBe(200)
+      expect((await mgmt(a.id)).pickup.status).toBe('IN_TRANSIT')
+      expect((await sim()).body.code).toBe('INVALID_STATE')   // vendor confirms receipt itself
+      // store closed: recorded, nothing else changes
+      const closed = await call('POST', `${M}/${a.id}/pickup/store-closed`, T.winner, { note: 'Shutter down' })
+      expect(closed.status, JSON.stringify(closed.body)).toBe(200)
+      expect(await events(a.id)).toContain('STORE_CLOSED')
+      expect((await mgmt(a.id)).pickup.status).toBe('IN_TRANSIT')
+      expect((await call('POST', `${M}/${a.id}/received`, T.winner)).status).toBe(200)
+      expect((await journey(a.id)).stage).toBe('RECEIVED')
+    })
+
+    it('demo mode: paying before the customer picks a slot books it as soon as the slot is chosen', async () => {
+      await setSim(true)
+      const a = await accepted()
+      await payOnline(a.id)
+      expect((await mgmt(a.id)).pickup).toBeNull()
+      await bookPickup(a.id)
+      expect((await mgmt(a.id)).pickup).toMatchObject({ auto: true, simulated: true })
+    })
+
+    it('a stranger cannot step or close someone else\'s pickup', async () => {
+      await setSim(true)
+      const a = await accepted()
+      await bookPickup(a.id); await payOnline(a.id)
+      const other = T.winner === T.buyA ? T.buyB : T.buyA
+      expect((await call('POST', `${M}/${a.id}/pickup/simulate`, other)).status).toBe(404)
+      expect((await call('POST', `${M}/${a.id}/pickup/store-closed`, other)).status).toBe(404)
+      expect((await call('POST', `${M}/${a.id}/pickup/store-closed`, T.winner)).body.code).toBe('INVALID_STATE')   // not on its way yet
+    })
+
+    it('without Shiprocket the vendor can still book a courier by hand, and the reason is on the timeline', async () => {
+      await setSim(false)
+      const a = await accepted()
+      await bookPickup(a.id); await payOnline(a.id)
+      expect((await mgmt(a.id)).pickup).toBeNull()
+      expect(await events(a.id)).toContain('PICKUP_AUTO_FAILED')
+      expect((await call('POST', `${M}/${a.id}/pickup`, T.winner, { provider: 'PORTER', awb: 'MAN' + rand(), courierName: 'Porter' })).status).toBe(200)
+      expect((await mgmt(a.id)).pickup).toMatchObject({ status: 'PICKUP_SCHEDULED', auto: false })
+    })
+  })
 })

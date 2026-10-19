@@ -149,7 +149,11 @@ export async function completeFunding(rzpOrderId, rzpPaymentId, { source = 'APP_
     await client.query(`UPDATE sell_requests SET vendor_payment_status = 'HELD', vendor_held_amount = $2, updated_at = NOW() WHERE id = $1`, [o.request_id, o.amount])
     await addEvent(client, o.request_id, 'VENDOR_FUNDED', 'Buyer payment received and held', null, { amount: money(o.amount), paymentId: rzpPaymentId, source })
   })
-  if (outcome === 'FUNDED') notifySellEvent('VENDOR_FUNDED', requestId)
+  if (outcome === 'FUNDED') {
+    notifySellEvent('VENDOR_FUNDED', requestId)
+    const { autoBookPickup } = await import('./sell-pickup-booking.service.js')
+    await autoBookPickup(requestId).catch((err) => logger.error({ err: err.message, requestId }, 'auto pickup failed'))
+  }
   if (outcome === 'REFUND') await settleVendorRefunds(requestId)
   return { skipped: outcome === 'SKIPPED' }
 }

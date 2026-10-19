@@ -19,6 +19,7 @@ import * as evidence from './evidence.service.js'
 import * as qc from './request-qc.service.js'
 import * as journey from './sell-journey.service.js'
 import * as rzp from './sell-razorpay.service.js'
+import * as autoPickup from './sell-pickup-booking.service.js'
 import * as chat from './sell-chat.service.js'
 import { evidencePath, verifyEvidence } from './evidence-storage.js'
 
@@ -288,6 +289,8 @@ function manageRoutes(scopeKind) {
       act('pickup', vendorOrStaff, (a, id, b) => journey.savePickup(a, id, b))
       act('pickup/status', vendorOrStaff, (a, id, b) => journey.setPickupStatus(a, id, b.status, { note: b.note, providerStatus: b.providerStatus }))
       act('pickup/sync', vendorOrStaff, async (a, id) => journey.syncPickup(a, id, await (async () => { const { ShippingService } = await import('../shipping/shipping.service.js'); return new ShippingService() })()))
+      act('pickup/simulate', vendorOrStaff, (a, id) => autoPickup.advanceSimulation(a, id))
+      act('pickup/store-closed', vendorOrStaff, (a, id, b) => autoPickup.storeClosed(a, id, b))
       act('received', vendorOrStaff, (a, id) => journey.markReceived(a, id))
       act('returned', vendorOrStaff, (a, id) => journey.markReturned(a, id))
       // finance

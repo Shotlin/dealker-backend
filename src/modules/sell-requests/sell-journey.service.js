@@ -24,6 +24,7 @@ import { SellError, addEvent, getSettings, lock, tx } from './sell-requests.serv
 import { isValidImei } from './valuation.js'
 import { notifySellEvent } from './sell-requests.notify.js'
 import { sendPayout, settleVendorRefunds } from './sell-razorpay.service.js'
+import { autoBookPickup } from './sell-pickup-booking.service.js'
 
 const num = (v) => (v == null ? null : Number(v))
 const text = (v, max) => String(v ?? '').trim().slice(0, max)
@@ -272,7 +273,7 @@ export const bookFulfilment = (userId, id, input = {}) => tx(async (client) => {
             pickup_date = $7, pickup_window = $8, pickup_note = $9, stage = 'PICKUP_REQUESTED', updated_at = NOW() WHERE id = $1`,
     [id, mode, address, pincode, lat, lng, date, win, text(input.note, 300) || null])
   await addEvent(client, id, 'FULFILMENT_BOOKED', mode === 'PICKUP' ? 'Pickup requested' : 'Drop-off chosen', actor, { mode, date, window: win })
-}).then(() => { notifySellEvent('FULFILMENT_BOOKED', id, { skipCustomer: true }); return getJourney(userId, id) })
+}).then(async () => { notifySellEvent('FULFILMENT_BOOKED', id, { skipCustomer: true }); await autoBookPickup(id).catch(() => {}); return getJourney(userId, id) })
 
 // ── 4 · Vendor funding (held by the platform) ───────────────────────────
 
@@ -324,7 +325,7 @@ export const confirmVendorFunding = (actor, id, input = {}) => tx(async (client)
   }
   await client.query(`UPDATE sell_requests SET vendor_payment_status = 'HELD', vendor_held_amount = $2, updated_at = NOW() WHERE id = $1`, [id, amount])
   await addEvent(client, id, 'VENDOR_FUNDED', 'Buyer payment received and held', actor, { amount })
-}).then(() => { notifySellEvent('VENDOR_FUNDED', id); return getManageJourney(actor, id) })
+}).then(async () => { notifySellEvent('VENDOR_FUNDED', id); await autoBookPickup(id).catch(() => {}); return getManageJourney(actor, id) })
 
 const fundedOrNotRequired = async (client, r) => {
   const s = await getSettings(client)
@@ -696,11 +697,11 @@ export const markVendorRefunded = (actor, id, { reference } = {}) => tx(async (c
 
 const CUSTOMER_STEPS = {
   PICKUP: [
-    ['Offer Accepted', 'OFFER_ACCEPTED'], ['Pickup Scheduled', 'PICKUP_SCHEDULED'], ['Device Picked Up', 'PICKED_UP'], ['In Transit', 'IN_TRANSIT'],
+    ['Offer Accepted', 'OFFER_ACCEPTED'], ['Buyer Paid', 'VENDOR_FUNDED'], ['Pickup Scheduled', 'PICKUP_SCHEDULED'], ['Device Picked Up', 'PICKED_UP'], ['In Transit', 'IN_TRANSIT'],
     ['Received by Buyer', 'RECEIVED'], ['Inspection', 'INSPECTING'], ['Final Price Approved', 'FINAL_PRICE_APPROVED'], ['Payment Sent', 'PAYOUT_PAID'],
   ],
   DROP_OFF: [
-    ['Offer Accepted', 'OFFER_ACCEPTED'], ['Drop-off Chosen', 'FULFILMENT_BOOKED'], ['Received at Store', 'RECEIVED'], ['Inspection', 'INSPECTING'],
+    ['Offer Accepted', 'OFFER_ACCEPTED'], ['Drop-off Chosen', 'FULFILMENT_BOOKED'], ['Buyer Paid', 'VENDOR_FUNDED'], ['Received at Store', 'RECEIVED'], ['Inspection', 'INSPECTING'],
     ['Final Price Approved', 'FINAL_PRICE_APPROVED'], ['Payment Sent', 'PAYOUT_PAID'],
   ],
 }
@@ -741,7 +742,8 @@ async function build(r, { forCustomer }) {
   const steps = defs.map(([label, kind]) => ({ key: kind, label, done: first.has(kind), at: iso(first.get(kind)?.created_at) }))
   // A step the courier never reported (picked up → received, skipping "in transit") must not stay open behind later ones.
   const lastDone = steps.reduce((m, s, i) => (s.done ? i : m), -1)
-  steps.forEach((s, i) => { if (i < lastDone && !s.done) { s.done = true; s.at = steps[lastDone].at } })
+  const INDEPENDENT = ['VENDOR_FUNDED', 'FULFILMENT_BOOKED', 'OFFER_ACCEPTED']
+  steps.forEach((s, i) => { if (i < lastDone && !s.done && !INDEPENDENT.includes(s.key)) { s.done = true; s.at = steps[lastDone].at } })
   const cur = steps.findIndex((s) => !s.done)
   steps.forEach((s, i) => { s.current = !ended && i === cur })
   const p = pk[0]
@@ -754,7 +756,7 @@ async function build(r, { forCustomer }) {
     buyer: ve[0] ? { name: ve[0].shop || ve[0].name, phone: forCustomer && !['PICKUP_REQUESTED', 'PICKUP_SCHEDULED', 'PICKED_UP', 'IN_TRANSIT', 'RECEIVED', 'INSPECTING', 'FINAL_PRICE', 'PAYOUT_PENDING', 'PAID'].includes(r.stage) ? undefined : ve[0].phone, address: r.fulfilment === 'DROP_OFF' || !forCustomer ? ve[0].address : undefined } : null,
     fulfilment: r.fulfilment ? { mode: r.fulfilment, address: r.pickup_address, pincode: r.pickup_pincode, date: ymd(r.pickup_date), window: r.pickup_window, note: r.pickup_note } : null,
     pickup: p ? {
-      provider: p.provider, awb: p.awb, courier: p.courier_name, trackingUrl: p.tracking_url, status: p.status, providerStatus: p.provider_status,
+      provider: p.provider, awb: p.awb, courier: p.courier_name, trackingUrl: p.tracking_url, status: p.status, auto: Boolean(p.auto_booked), simulated: Boolean(p.is_simulated), providerStatus: p.provider_status,
       scheduledAt: iso(p.scheduled_at), pickedUpAt: iso(p.picked_up_at), receivedAt: iso(p.received_at),
     } : null,
     inspection: qc ? { status: qc.status, finalValuation: num(qc.final_valuation), customerDecision: qc.customer_decision, originalPrice: num(r.accepted_offer_id ? r.final_price : null) } : null,
