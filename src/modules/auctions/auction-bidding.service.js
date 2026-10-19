@@ -101,7 +101,7 @@ async function enforceRateLimit(userId, settings) {
 async function hydrate(rows, userId) {
   if (!rows.length) return []
   const ids = rows.map((r) => r.id)
-  const [regs, watch, nos] = await Promise.all([
+  const [regs, watch, nos, cats] = await Promise.all([
     query('SELECT * FROM auction_registrations WHERE user_id = $1 AND auction_id = ANY($2)', [userId, ids]),
     query('SELECT auction_id FROM auction_watchers WHERE user_id = $1 AND auction_id = ANY($2)', [userId, ids]),
     query(
@@ -109,11 +109,23 @@ async function hydrate(rows, userId) {
          JOIN auctions a ON a.id = r.auction_id AND (r.user_id = a.leader_id OR r.user_id = a.winner_id)
         WHERE a.id = ANY($1)`, [ids]
     ),
+    query(`SELECT a.id, c.name FROM auctions a JOIN products p ON p.id = a.product_id JOIN categories c ON c.id = p.category_id WHERE a.id = ANY($1)`, [ids]),
   ])
+  const catOf = new Map(cats.rows.map((r) => [r.id, r.name]))
+  // Card tags, from real activity in this list: most bids → Top Bid, many bidders → Hot Auction, many views → Trending.
+  const live = rows.filter((r) => r.status === 'LIVE')
+  const topBids = Math.max(0, ...live.map((r) => Number(r.bid_count || 0)))
+  const badgeOf = (r) => {
+    if (r.status !== 'LIVE') return null
+    if (topBids > 0 && Number(r.bid_count) === topBids) return 'TOP_BID'
+    if (Number(r.bidder_count || 0) >= 3) return 'HOT'
+    if (Number(r.view_count || 0) >= 25) return 'TRENDING'
+    return null
+  }
   const myReg = new Map(regs.rows.map((r) => [r.auction_id, r]))
   const watching = new Set(watch.rows.map((r) => r.auction_id))
   const noOf = new Map(nos.rows.map((r) => [`${r.auction_id}:${r.user_id}`, r.bidder_no]))
-  return rows.map((a) => serializePublic(a, {
+  return rows.map((a) => serializePublic({ ...a, category_name: catOf.get(a.id) || null, badge: badgeOf(a) }, {
     my: myReg.get(a.id) || null,
     watching: watching.has(a.id),
     leaderBidderNo: a.leader_id ? noOf.get(`${a.id}:${a.leader_id}`) : null,
@@ -178,7 +190,7 @@ export async function listPublic(userId, { tab = 'live', q = '', categoryId = nu
   params.push(limit, offset)
   const sql = `SELECT a.*, v.name AS seller_name FROM auctions a LEFT JOIN vendors v ON v.id = a.vendor_id
                 WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT $${params.length - 1} OFFSET $${params.length}`
-  const [rows, count, counts, brands, watching] = await Promise.all([
+  const [rows, count, counts, brands, watching, categories] = await Promise.all([
     query(sql, params),
     query(`SELECT COUNT(*)::int AS n FROM auctions a WHERE ${where.join(' AND ')}`, filterParams),
     query(`SELECT COUNT(*) FILTER (WHERE ${TAB_WHERE.live})::int AS live, COUNT(*) FILTER (WHERE ${TAB_WHERE.upcoming})::int AS upcoming,
@@ -186,13 +198,15 @@ export async function listPublic(userId, { tab = 'live', q = '', categoryId = nu
     query(`SELECT p.brand AS name, COUNT(*)::int AS n FROM auctions a JOIN products p ON p.id = a.product_id
             WHERE ${baseWhere} AND p.brand IS NOT NULL AND p.brand <> '' GROUP BY p.brand ORDER BY n DESC, p.brand LIMIT 20`, baseParams),
     userId ? query(`SELECT COUNT(*)::int AS n FROM auction_watchers w JOIN auctions a ON a.id = w.auction_id WHERE w.user_id = $1 AND a.audience = $2 AND a.status IN ('SCHEDULED','LIVE','PAUSED')`, [userId, audience]) : { rows: [{ n: 0 }] },
+    query(`SELECT c.id, c.name, COUNT(*)::int AS n FROM auctions a JOIN products p ON p.id = a.product_id JOIN categories c ON c.id = p.category_id
+            WHERE a.audience = $1 AND ${TAB_WHERE[tabKey]} GROUP BY c.id, c.name ORDER BY n DESC, c.name LIMIT 12`, [audience]),
   ])
   return {
     success: true,
     data: await hydrate(rows.rows, userId),
     pagination: { page, limit, total: count.rows[0].n },
     counts: { ...counts.rows[0], watching: watching.rows[0].n },
-    facets: { brands: brands.rows.map((b) => ({ name: b.name, count: b.n })) },
+    facets: { brands: brands.rows.map((b) => ({ name: b.name, count: b.n })), categories: categories.rows.map((c) => ({ id: c.id, name: c.name, count: c.n })) },
     server_time: new Date().toISOString(),
   }
 }
@@ -214,6 +228,10 @@ export async function getPublic(userId, auctionId) {
   const a = rows[0]
   if (!a || !PUBLIC_STATUSES.includes(a.status)) throw new AuctionError('NOT_FOUND', 'Auction not found', 404)
   if (a.audience !== (await audienceFor(userId))) throw new AuctionError('NOT_FOUND', 'Auction not found', 404)
+  if (['SCHEDULED', 'LIVE', 'PAUSED'].includes(a.status)) {
+    query('UPDATE auctions SET view_count = view_count + 1 WHERE id = $1', [a.id]).catch(() => {})
+    a.view_count = Number(a.view_count || 0) + 1
+  }
   const [item] = await hydrate([a], userId)
   if (a.status === 'CANCELLED' && !item.my.registered) throw new AuctionError('NOT_FOUND', 'Auction not found', 404)
   return item

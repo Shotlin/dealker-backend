@@ -75,12 +75,13 @@ export async function auctionsRoutes(fastify) {
     return bidding.mine(request.user.id, { tab, page: Math.max(1, Number(page)), limit: Math.min(50, Number(limit) || 20) })
   }))
 
-  fastify.get('/:id', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ({
-    success: true, data: await bidding.getPublic(request.user.id, request.params.id),
+  // Guests can open a lot (photos, video, QC, bid history); joining and bidding still need a login.
+  fastify.get('/:id', { preHandler: optionalAuth, schema: { params: idParams } }, wrap(async (request) => ({
+    success: true, data: await bidding.getPublic(request.user?.id ?? null, request.params.id),
   })))
 
-  fastify.get('/:id/bids', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ({
-    success: true, data: await bidding.listBids(request.user.id, request.params.id, { limit: Number(request.query?.limit) || 50 }),
+  fastify.get('/:id/bids', { preHandler: optionalAuth, schema: { params: idParams } }, wrap(async (request) => ({
+    success: true, data: await bidding.listBids(request.user?.id ?? null, request.params.id, { limit: Number(request.query?.limit) || 50 }),
   })))
 
   fastify.post('/:id/register', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ({
