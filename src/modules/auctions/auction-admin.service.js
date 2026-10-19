@@ -426,9 +426,19 @@ async function scopeCheck(actor, id) {
   assertScope(actor, rows[0])
 }
 
-export async function endNow(actor, id) {
-  ensureAdmin(actor, 'end an auction early')
+export async function endNow(actor, id, { waiveReserve = false } = {}) {
   await scopeCheck(actor, id)
+  if (!isAdmin(actor)) {
+    // A seller may close their own auction early to take the current top bid — only once somebody has bid.
+    const { rows } = await query('SELECT bid_count, status FROM auctions WHERE id = $1', [id])
+    if (!rows[0]) throw new AuctionError('NOT_FOUND', 'Auction not found', 404)
+    if (Number(rows[0].bid_count) < 1) throw new AuctionError('NO_BIDS', 'There are no bids yet. Cancel the auction instead if you do not want to continue.', 409)
+  }
+  // The seller may accept the top bid even though it is below their hidden reserve: drop the reserve, then close.
+  if (waiveReserve === true) {
+    await query(`UPDATE auctions SET reserve_price = NULL, updated_at = NOW() WHERE id = $1 AND status IN ('LIVE','PAUSED')`, [id])
+    await query(`INSERT INTO auction_events (auction_id, event_type, actor_role, payload) VALUES ($1,'RESERVE_WAIVED',$2,'{}')`, [id, isAdmin(actor) ? 'ADMIN' : 'VENDOR']).catch(() => {})
+  }
   return endAuctionNow(id, actor)
 }
 

@@ -204,6 +204,43 @@ d('auction workflow B2C + B2B (real database)', () => {
     expect(await bal(U.loser.userId)).toBe(b0)
   })
 
+  it('the seller can end their own live auction early to sell to the top bidder; not with zero bids, not someone else\'s', async () => {
+    const prod = await makeProduct(1)
+    const a = await svc.admin.createAuction(U.admin, { productId: prod.productId, startPrice: 10000, registrationFee: 500, bidIncrement: 500, startsAt: new Date(Date.now() - 1000).toISOString(), durationHours: 6 })
+    await q('UPDATE auctions SET vendor_id = $2 WHERE id = $1', [a.id, U.seller.id])
+    await expect(svc.admin.endNow(U.sellerActor, a.id)).rejects.toMatchObject({ code: 'NO_BIDS' })
+    await expect(svc.admin.endNow({ kind: 'VENDOR', userId: U.loser.userId, vendorId: U.loser.id }, a.id)).rejects.toBeTruthy()
+    await join(U.l1, a.id); await bid(U.l1, a.id, 12000)
+    await svc.admin.endNow(U.sellerActor, a.id)                     // hours before the timer would have run out
+    const ended = await one('SELECT status, winner_id FROM auctions WHERE id = $1', [a.id])
+    expect(ended.status).toBe('AWAITING_PAYMENT')
+    expect(ended.winner_id).toBe(U.l1)
+    // the buyer pays, then the seller ships it themselves
+    const pay = await svc.checkout.checkout(U.l1, a.id, { addressId: await addr(U.l1), paymentMethod: 'WALLET' })
+    const so = await one('SELECT id FROM seller_orders WHERE order_id = $1', [pay.order_id])
+    await svc.sellerOrders.updateStatus(so.id, U.seller.id, 'CONFIRMED', U.seller.userId)
+    await svc.track.shipmentTracking.createManual(so.id, { provider: 'SELF', courierName: 'Blue Dart', awb: 'BD123' }, U.seller.userId)
+    const sh = await one('SELECT id, awb FROM shipments WHERE seller_order_id = $1', [so.id])
+    expect(sh.awb).toBe('BD123')
+    await svc.track.shipmentTracking.addEvent(sh.id, { status: 'PICKED_UP' }, U.seller.userId)
+    expect((await one('SELECT status FROM seller_orders WHERE id = $1', [so.id])).status).toBe('SHIPPED')
+  })
+
+  it('reserve not met: ending closes it UNSOLD (fee refunded); with "waive reserve" the top bidder wins and can pay', async () => {
+    for (const waive of [false, true]) {
+      const prod = await makeProduct(1)
+      const a = await svc.admin.createAuction(U.admin, { productId: prod.productId, startPrice: 10000, reservePrice: 50000, registrationFee: 500, bidIncrement: 500, startsAt: new Date(Date.now() - 1000).toISOString(), durationHours: 6 })
+      await q('UPDATE auctions SET vendor_id = $2 WHERE id = $1', [a.id, U.seller.id])
+      const b0 = await bal(U.l2)
+      await join(U.l2, a.id); await bid(U.l2, a.id, 10000)
+      await svc.admin.endNow(U.sellerActor, a.id, { waiveReserve: waive })
+      const st = (await one('SELECT status, winner_id FROM auctions WHERE id = $1', [a.id]))
+      if (!waive) { expect(st.status).toBe('UNSOLD'); expect(await bal(U.l2)).toBe(b0) }   // fee refunded
+      else { expect(st).toMatchObject({ status: 'AWAITING_PAYMENT', winner_id: U.l2 }); expect(await bal(U.l2)).toBe(b0 - 500) }
+      await q('DELETE FROM auctions WHERE id = $1', [a.id])
+    }
+  })
+
   it('a loser gets their fee back when the auction is cancelled (B2C and B2B)', async () => {
     for (const audience of ['B2C', 'B2B']) {
       const prod = await makeProduct(3)

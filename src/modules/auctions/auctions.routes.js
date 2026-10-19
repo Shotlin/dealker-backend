@@ -218,5 +218,5 @@ export async function auctionManageRoutes(fastify) {
   action('pause', 'auctions.moderate', (a, id) => admin.pauseAuction(a, id), { platform: true })
   action('resume', 'auctions.moderate', (a, id) => admin.resumeAuction(a, id), { platform: true })
   action('extend', 'auctions.moderate', (a, id, body) => admin.extendAuction(a, id, body.minutes), { platform: true })
-  action('end-now', 'auctions.moderate', (a, id) => admin.endNow(a, id), { platform: true })
+  action('end-now', 'auctions.manage', (a, id, body) => admin.endNow(a, id, { waiveReserve: body.waiveReserve === true }))
 }
