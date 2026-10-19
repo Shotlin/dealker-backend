@@ -18,6 +18,7 @@ import * as svc from './sell-requests.service.js'
 import * as evidence from './evidence.service.js'
 import * as qc from './request-qc.service.js'
 import * as journey from './sell-journey.service.js'
+import * as rzp from './sell-razorpay.service.js'
 import * as chat from './sell-chat.service.js'
 import { evidencePath, verifyEvidence } from './evidence-storage.js'
 
@@ -280,6 +281,9 @@ function manageRoutes(scopeKind) {
       fastify.get('/finance/queue', { preHandler: pre(platformOnly(FIN)) }, wrap(async () => ok(await journey.financeQueue())))
       // buyer (vendor) steps
       act('vendor-payment', vendorOrStaff, (a, id, b) => (a.kind === 'VENDOR' ? journey.submitVendorFunding(a, id, b) : journey.confirmVendorFunding(a, id, b)))
+      act('vendor-payment/razorpay/order', vendorOnly, (a, id) => rzp.createFundingOrder(a, id))
+      act('vendor-payment/razorpay/verify', vendorOnly, (a, id, b) => rzp.verifyFunding(a, id, b))
+      act('vendor-payment/razorpay/sync', vendorOnly, (a, id) => rzp.syncFunding(a, id))
       act('vendor-payment/confirm', platformOnly(FIN), (a, id, b) => journey.confirmVendorFunding(a, id, b))
       act('pickup', vendorOrStaff, (a, id, b) => journey.savePickup(a, id, b))
       act('pickup/status', vendorOrStaff, (a, id, b) => journey.setPickupStatus(a, id, b.status, { note: b.note, providerStatus: b.providerStatus }))
@@ -289,6 +293,7 @@ function manageRoutes(scopeKind) {
       // finance
       act('payout/paid', platformOnly(FIN), (a, id, b) => journey.markPayoutPaid(a, id, b))
       act('payout/failed', platformOnly(FIN), (a, id, b) => journey.failPayout(a, id, b.reason))
+      act('payout/sync', platformOnly(FIN), async (a, id) => { await rzp.syncPayout(id); return journey.getManageJourney(a, id) })
       act('payout/release', platformOnly(FIN), async (a, id) => { await journey.releasePayout(a, id); return journey.getManageJourney(a, id) })
       act('refund/paid', platformOnly(FIN), (a, id, b) => journey.markVendorRefunded(a, id, b))
       fastify.get('/:id/payout/details', { preHandler: pre(platformOnly(FIN)), schema: params }, wrap(async (request) => ok(await journey.revealPayoutDetails(actorOf(request), request.params.id))))

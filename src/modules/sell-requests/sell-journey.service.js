@@ -23,6 +23,7 @@ import { haversineKm } from '../../utils/distance.js'
 import { SellError, addEvent, getSettings, lock, tx } from './sell-requests.service.js'
 import { isValidImei } from './valuation.js'
 import { notifySellEvent } from './sell-requests.notify.js'
+import { sendPayout, settleVendorRefunds } from './sell-razorpay.service.js'
 
 const num = (v) => (v == null ? null : Number(v))
 const text = (v, max) => String(v ?? '').trim().slice(0, max)
@@ -488,6 +489,7 @@ export async function afterQc(id) {
     return notify
   })
   if (out) notifySellEvent(out, id)
+  await settleVendorRefunds(id).catch((err) => logger.error({ err: err.message, id }, 'refund settle failed'))
   // A customer who already chose a payout method gets paid as soon as the price is final.
   await releasePayout(null, id, { system: true }).catch(() => {})
   return true
@@ -513,6 +515,7 @@ export async function onClosed(id) {
     await client.query(`UPDATE sell_requests SET stage = $2, payout_status = CASE WHEN payout_status IN ('PENDING','PROCESSING') THEN 'NONE' ELSE payout_status END, updated_at = NOW() WHERE id = $1`, [id, withDevice ? 'RETURNING' : 'CLOSED'])
     if (withDevice) await addEvent(client, id, 'RETURNING', 'The device will be returned to you', null)
   })
+  await settleVendorRefunds(id).catch((err) => logger.error({ err: err.message, id }, 'refund settle failed'))
 }
 
 /** The buyer confirms the phone is back with the customer (closes a RETURNING request). */
@@ -619,6 +622,7 @@ export async function releasePayout(actor, id, { system = false } = {}) {
     return true
   }
   notifySellEvent('PAYOUT_PROCESSING', id)
+  await sendPayout(id).catch((err) => logger.error({ err: err.message, id }, 'automatic payout failed'))
   return true
 }
 
@@ -674,6 +678,7 @@ async function finishPayout(id, { method = null, reference, actor }) {
     await addEvent(client, id, 'COMPLETED', 'Completed', actor)
   })
   notifySellEvent('PAYOUT_PAID', id)
+  await settleVendorRefunds(id).catch((err) => logger.error({ err: err.message, id }, 'refund settle failed'))
 }
 
 /** Finance marks the buyer's refund as returned. */
@@ -734,6 +739,9 @@ async function build(r, { forCustomer }) {
   const defs = r.fulfilment ? CUSTOMER_STEPS[r.fulfilment] : BEFORE_CHOICE
   const ended = ['CANCELLED', 'REJECTED'].includes(r.status)
   const steps = defs.map(([label, kind]) => ({ key: kind, label, done: first.has(kind), at: iso(first.get(kind)?.created_at) }))
+  // A step the courier never reported (picked up → received, skipping "in transit") must not stay open behind later ones.
+  const lastDone = steps.reduce((m, s, i) => (s.done ? i : m), -1)
+  steps.forEach((s, i) => { if (i < lastDone && !s.done) { s.done = true; s.at = steps[lastDone].at } })
   const cur = steps.findIndex((s) => !s.done)
   steps.forEach((s, i) => { s.current = !ended && i === cur })
   const p = pk[0]

@@ -50,10 +50,10 @@ export default async function paymentsRoutes(fastify) {
   // POST /webhook — Razorpay event webhook
   // Raw body must be preserved for signature verification.
   fastify.post('/webhook', {
+    // No body schema on purpose: the app compiles schemas with ajv `removeAdditional: 'all'`, which strips every
+    // field of an "any object" body to {} — the signature (over rawBody) still passed, but every event was then
+    // read as 'unknown' and silently ignored. Authenticity is the signature check inside handleWebhook.
     config: { rawBody: true },
-    schema: {
-      body: { type: 'object', additionalProperties: true },
-    },
   }, controller.webhook.bind(controller))
 
   // ─── Admin routes ───────────────────────────────────────

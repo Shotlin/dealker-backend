@@ -83,7 +83,7 @@ export const sellerOrdersRoutes = async function sellerOrderRoutes(fastify) {
     handler: async (request, reply) => {
       const so = await service.getById(request.params.id, request.vendorId || null)
       if (!so) return reply.status(404).send({ success: false, message: 'Seller order not found' })
-      if (String(so.payment_status).toUpperCase() !== 'PAID') {
+      if (String(so.payment_status).toUpperCase() !== 'PAID' && String(so.payment_method).toUpperCase() !== 'COD') {
         return reply.status(409).send({ success: false, code: 'NOT_PAID', message: 'The buyer has not paid yet' })
       }
       try {

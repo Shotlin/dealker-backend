@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import RazorpaySdk from 'razorpay'
 import { logger } from '../../config/logger.js'
+import * as sellRazorpay from '../sell-requests/sell-razorpay.service.js'
 import { razorpay, getRazorpayKeyId, getRazorpayKeySecret, getRazorpayWebhookSecret } from '../../config/razorpay.js'
 import { orderQueue } from '../../config/bullmq.js'
 import { getClient } from '../../config/database.js'
@@ -615,6 +616,11 @@ export class PaymentsService {
               method: payload.payment?.entity?.method,
               source: `PAYMENT_WEBHOOK_${eventType.toUpperCase()}`,
             })
+          } else if (await sellRazorpay.completeFundingByOrder(rzpOrderId, rzpPaymentId).catch((err) => {
+            logger.warn({ err: err.message, rzpOrderId }, 'Sell funding webhook completion failed')
+            return true // ours, but not applied yet — Razorpay retries the delivery
+          })) {
+            // A buyer's payment for a sold phone (sell-your-phone journey) — handled above.
           } else {
             // Not a checkout order payment — check whether it's a wallet
             // top-up instead (a completely separate Razorpay order created
@@ -624,6 +630,15 @@ export class PaymentsService {
             })
           }
         }
+        break
+      }
+
+      case 'payout.processed':
+      case 'payout.failed':
+      case 'payout.rejected':
+      case 'payout.reversed': {
+        const p = payload.payout?.entity
+        if (p?.id) await sellRazorpay.applyPayoutResult(p).catch((err) => logger.warn({ err: err.message, payoutId: p.id }, 'Sell payout webhook failed'))
         break
       }
 

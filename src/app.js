@@ -513,6 +513,9 @@ export const buildApp = async () => {
   const { repairsCustomerRoutes, repairsManageRoutes, repairEvidenceFileRoutes } = await import("./modules/repairs/repairs.routes.js");
   await app.register(repairsCustomerRoutes, { prefix: "/api/v1/repairs" });
   await app.register(repairsManageRoutes, { prefix: "/api/v1/manage/repairs" });
+  // Vendor order inbox — products + auctions + repairs in one list
+  const { vendorOrdersRoutes } = await import("./modules/vendor-orders/vendor-orders.routes.js");
+  await app.register(vendorOrdersRoutes, { prefix: "/api/v1/manage/orders" });
   await app.register(repairEvidenceFileRoutes, { prefix: "/api/v1/media" });
 
   // Sales documents — GST tax invoices, bills of supply, credit/debit notes (B2C + B2B)

@@ -75,6 +75,8 @@ const envSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
   RAZORPAY_CURRENCY: z.string().default('INR'),
+  // RazorpayX current-account number: when set, UPI / bank payouts to sellers are sent automatically.
+  RAZORPAYX_ACCOUNT_NUMBER: z.string().optional(),
 
   // Cloudinary
   CLOUDINARY_CLOUD_NAME: z.string().optional(),
