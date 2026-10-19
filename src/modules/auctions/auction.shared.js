@@ -171,6 +171,8 @@ export function serializePublic(a, ctx = {}) {
           fee_credit: isWinner ? num(a.fee_credit) : null,
           payment_deadline: isWinner && a.status === 'AWAITING_PAYMENT' ? a.payment_deadline : null,
           order_id: isWinner ? a.order_id : null,
+          order_status: isWinner ? a.order_status || null : null,
+          order_number: isWinner ? a.order_number || null : null,
         }
       : { registered: false },
   }

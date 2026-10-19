@@ -532,19 +532,30 @@ export async function processPaymentDeadlines() {
           return
         }
         if (a.order_id && orderIsDead(order)) {
-          // the online payment window lapsed and the order was cancelled (which restored the unit):
-          // take the unit back off sale and let the winner try again, if there is still time.
-          await client.query('UPDATE auctions SET order_id = NULL, stock_reserved = FALSE WHERE id = $1', [a.id])
-          a.order_id = null
-          a.stock_reserved = false
-          try {
-            await reserveStock(client, a)
-          } catch (err) {
-            await settleAsRefunded(client, a, 'CANCELLED', 'item no longer available', post, { cancelledReason: 'Stock no longer available after order expiry' })
-            await logEvent(client, a.id, 'CANCELLED', {}, { reason: 'STOCK_UNAVAILABLE_AFTER_ORDER_EXPIRY' })
-            return
+          const restored = String(order?.status || 'CANCELLED').toUpperCase() === 'CANCELLED'
+          if (!restored) {
+            // The payment failed (declined card, bad callback) but the order was never cancelled, so the unit is STILL held
+            // for this auction. Close the stale order without touching stock and let the winner try again.
+            await client.query(`UPDATE orders SET status = 'CANCELLED', cancelled_reason = COALESCE(cancelled_reason, 'Online payment failed'), updated_at = NOW() WHERE id = $1`, [a.order_id])
+            await client.query(`UPDATE seller_orders SET status = 'CANCELLED', fulfilment_status = 'CANCELLED', cancelled_at = NOW(), updated_at = NOW() WHERE order_id = $1`, [a.order_id])
+            await client.query('UPDATE auctions SET order_id = NULL WHERE id = $1', [a.id])
+            a.order_id = null
+            result.released += 1
+          } else {
+            // the online payment window lapsed and the order was cancelled (which restored the unit):
+            // take the unit back off sale and let the winner try again, if there is still time.
+            await client.query('UPDATE auctions SET order_id = NULL, stock_reserved = FALSE WHERE id = $1', [a.id])
+            a.order_id = null
+            a.stock_reserved = false
+            try {
+              await reserveStock(client, a)
+            } catch (err) {
+              await settleAsRefunded(client, a, 'CANCELLED', 'item no longer available', post, { cancelledReason: 'Stock no longer available after order expiry' })
+              await logEvent(client, a.id, 'CANCELLED', {}, { reason: 'STOCK_UNAVAILABLE_AFTER_ORDER_EXPIRY' })
+              return
+            }
+            result.released += 1
           }
-          result.released += 1
         }
         if (new Date(a.payment_deadline) <= (await dbNow(client)) && !a.order_id) {
           await defaultLocked(client, a, post)

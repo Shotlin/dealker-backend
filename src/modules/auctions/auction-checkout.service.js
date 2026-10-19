@@ -27,11 +27,31 @@ import { lockAuction, onWinnerPaid, withTx } from './auction-settlement.service.
 const ordersRepo = new OrdersRepository()
 const walletRepo = new WalletRepository()
 
+/** The winner vendor's profile address as an `addresses` row (created once, reused after). */
+async function businessAddressId(client, userId) {
+  const { rows } = await client.query(
+    `SELECT vp.address_line1, vp.address_line2, vp.city, vp.state, vp.pincode, vp.latitude, vp.longitude
+       FROM vendor_users vu JOIN vendor_profiles vp ON vp.vendor_id = vu.vendor_id
+      WHERE vu.user_id = $1 AND vu.is_active = TRUE AND vu.deleted_at IS NULL LIMIT 1`, [userId])
+  const p = rows[0]
+  if (!p || !p.address_line1 || !p.city || !p.pincode) {
+    throw new AuctionError('ADDRESS_REQUIRED', 'Add your business address in Business Profile so we know where to deliver this lot', 422)
+  }
+  const { rows: ex } = await client.query(
+    `SELECT id FROM addresses WHERE user_id = $1 AND label = 'Business' AND address_line1 = $2 AND pincode = $3 AND deleted_at IS NULL LIMIT 1`,
+    [userId, p.address_line1, p.pincode])
+  if (ex[0]) return ex[0].id
+  const { rows: ins } = await client.query(
+    `INSERT INTO addresses (user_id, label, address_line1, address_line2, city, state, pincode, lat, lng, is_default)
+     VALUES ($1,'Business',$2,$3,$4,$5,$6,$7,$8,FALSE) RETURNING id`,
+    [userId, p.address_line1, p.address_line2 || null, p.city, p.state || null, p.pincode, p.latitude, p.longitude])
+  return ins[0].id
+}
+
 export async function checkout(userId, auctionId, { addressId, paymentMethod = 'WALLET', notes = null }) {
   if (!['WALLET', 'ONLINE'].includes(paymentMethod)) {
     throw new AuctionError('INVALID_PAYMENT_METHOD', 'Pay from your wallet or online', 400)
   }
-  if (!addressId) throw new AuctionError('ADDRESS_REQUIRED', 'Choose a delivery address', 400)
 
   return withTx(async (client, post) => {
     const a = await lockAuction(client, auctionId)
@@ -42,6 +62,9 @@ export async function checkout(userId, auctionId, { addressId, paymentMethod = '
     const now = (await client.query('SELECT clock_timestamp() AS now')).rows[0].now
     if (new Date(a.payment_deadline) <= now) throw new AuctionError('DEADLINE_PASSED', 'The payment window for this auction has closed', 409)
 
+    // A business (B2B) winner has no address book in the vendor app: deliver to the business address on their profile.
+    if (!addressId && a.audience === 'B2B') addressId = await businessAddressId(client, userId)
+    if (!addressId) throw new AuctionError('ADDRESS_REQUIRED', 'Choose a delivery address', 400)
     const { rows: addr } = await client.query('SELECT * FROM addresses WHERE id = $1 AND user_id = $2', [addressId, userId])
     if (!addr[0]) throw new AuctionError('ADDRESS_NOT_FOUND', 'Delivery address not found', 404)
 

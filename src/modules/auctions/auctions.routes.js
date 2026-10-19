@@ -109,7 +109,7 @@ export async function auctionsRoutes(fastify) {
 
   fastify.post('/:id/checkout', {
     preHandler: auth,
-    schema: { params: idParams, body: { type: 'object', required: ['addressId'], properties: {
+    schema: { params: idParams, body: { type: 'object', properties: {
       addressId: { type: 'string', format: 'uuid' }, paymentMethod: { type: 'string', enum: ['WALLET', 'ONLINE'] }, notes: { type: 'string', maxLength: 500 },
     } } },
   }, wrap(async (request) => ({

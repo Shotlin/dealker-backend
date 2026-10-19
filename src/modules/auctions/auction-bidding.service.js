@@ -101,7 +101,7 @@ async function enforceRateLimit(userId, settings) {
 async function hydrate(rows, userId) {
   if (!rows.length) return []
   const ids = rows.map((r) => r.id)
-  const [regs, watch, nos, cats] = await Promise.all([
+  const [regs, watch, nos, cats, ords] = await Promise.all([
     query('SELECT * FROM auction_registrations WHERE user_id = $1 AND auction_id = ANY($2)', [userId, ids]),
     query('SELECT auction_id FROM auction_watchers WHERE user_id = $1 AND auction_id = ANY($2)', [userId, ids]),
     query(
@@ -110,7 +110,9 @@ async function hydrate(rows, userId) {
         WHERE a.id = ANY($1)`, [ids]
     ),
     query(`SELECT a.id, c.name FROM auctions a JOIN products p ON p.id = a.product_id JOIN categories c ON c.id = p.category_id WHERE a.id = ANY($1)`, [ids]),
+    query(`SELECT a.id, o.status, o.order_number FROM auctions a JOIN orders o ON o.id = a.order_id WHERE a.id = ANY($1) AND a.winner_id = $2`, [ids, userId]),
   ])
+  const orderOf = new Map(ords.rows.map((r) => [r.id, r]))
   const catOf = new Map(cats.rows.map((r) => [r.id, r.name]))
   // Card tags, from real activity in this list: most bids → Top Bid, many bidders → Hot Auction, many views → Trending.
   const live = rows.filter((r) => r.status === 'LIVE')
@@ -125,7 +127,7 @@ async function hydrate(rows, userId) {
   const myReg = new Map(regs.rows.map((r) => [r.auction_id, r]))
   const watching = new Set(watch.rows.map((r) => r.auction_id))
   const noOf = new Map(nos.rows.map((r) => [`${r.auction_id}:${r.user_id}`, r.bidder_no]))
-  return rows.map((a) => serializePublic({ ...a, category_name: catOf.get(a.id) || null, badge: badgeOf(a) }, {
+  return rows.map((a) => serializePublic({ ...a, category_name: catOf.get(a.id) || null, badge: badgeOf(a), order_status: orderOf.get(a.id)?.status || null, order_number: orderOf.get(a.id)?.order_number || null }, {
     my: myReg.get(a.id) || null,
     watching: watching.has(a.id),
     leaderBidderNo: a.leader_id ? noOf.get(`${a.id}:${a.leader_id}`) : null,
