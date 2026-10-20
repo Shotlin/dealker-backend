@@ -283,7 +283,7 @@ function serialize(r, { actor, items = [], quotes = [], payments = [], events = 
     serviceCenterId: r.assigned_vendor_id, serviceCenter: r.vendor_name || null, technician: r.technician_name || null,
     deviceReceivedAt: r.device_received_at?.toISOString() ?? null,
     money: {
-      approvedTotal: num(r.approved_total), advanceRequired: num(r.advance_required), amountPaid: num(r.amount_paid), amountDue: due,
+      approvedTotal: num(r.approved_total), agreedTotal: r.approved_total != null ? num(r.approved_total) : (r.offer_total != null ? num(r.offer_total) : null), advanceRequired: num(r.advance_required), amountPaid: num(r.amount_paid), amountDue: due,
       refundable: refundable(r), dueDate: ymd(r.due_date),
       overdue: !!(r.due_date && ymd(r.due_date) < today && due > 0),
     },
@@ -303,7 +303,16 @@ function serialize(r, { actor, items = [], quotes = [], payments = [], events = 
       validUntil: q.valid_until.toISOString(), expired: q.status === 'SENT' && q.valid_until.getTime() < Date.now(), createdAt: q.created_at.toISOString(),
     })),
     payments: payments.map((p) => ({ id: p.id, kind: p.kind, method: p.method, amount: num(p.amount), reference: p.reference, note: p.note, at: p.created_at.toISOString() })),
-    timeline: events.map((e) => ({ kind: e.kind, label: e.label, at: e.created_at.toISOString(), from: e.from_status, to: e.to_status })),
+    timeline: events
+      .filter((e) => !(customerView && e.kind === 'TECH_UPDATE' && e.meta?.customerVisible === false))
+      .map((e) => {
+        const t = { kind: e.kind, label: e.label, at: e.created_at.toISOString(), from: e.from_status, to: e.to_status }
+        if (e.kind === 'TECH_UPDATE' && e.meta) {
+          const { stage, issue, issueStatus, itemId, part, checks } = e.meta
+          t.progress = { stage: stage ?? null, issue: issue ?? null, issueStatus: issueStatus ?? null, itemId: itemId ?? null, part: part ?? null, checks: checks ?? null }
+        }
+        return t
+      }),
     media,
   }
   if (!customerView) out.settlement = r.commission_amount != null ? { commissionPct: num(r.commission_pct), commission: num(r.commission_amount), vendorPayable: num(r.vendor_payable) } : null
@@ -312,6 +321,7 @@ function serialize(r, { actor, items = [], quotes = [], payments = [], events = 
 
 const SELECT = `
   SELECT r.*, v.name AS vendor_name,
+         (SELECT o.total FROM repair_offers o WHERE o.id = r.selected_offer_id) AS offer_total,
          (SELECT COUNT(*) FROM repair_offers o WHERE o.request_id = r.id AND o.status IN ('OPEN','SELECTED')) AS offer_count,
          (SELECT COUNT(*) FROM repair_items i WHERE i.request_id = r.id) AS device_count,
          (SELECT COUNT(*) FROM repair_items i WHERE i.request_id = r.id AND i.delivered_at IS NOT NULL) AS delivered_count
@@ -334,6 +344,11 @@ async function loadDetail(r, actor) {
     query(`SELECT id, doc_number, doc_type FROM sales_documents WHERE source_type = 'REPAIR' AND source_id = $1 AND doc_type IN ('TAX_INVOICE','BILL_OF_SUPPLY')`, [r.id]),
   ])
   const out = serialize(r, { actor, items: items.rows, quotes: quotes.rows, payments: payments.rows, events: events.rows, media })
+  // The price the customer agreed to when choosing this shop (shown before the estimate is confirmed).
+  if (r.selected_offer_id && actor.kind !== 'CUSTOMER') {
+    const { rows: so } = await query('SELECT lines, subtotal, tax_pct, tax_amount, total, est_days_min, est_days_max, warranty_days, note FROM repair_offers WHERE id = $1', [r.selected_offer_id])
+    if (so[0]) out.selectedOffer = { lines: so[0].lines, subtotal: num(so[0].subtotal), taxPct: num(so[0].tax_pct), taxAmount: num(so[0].tax_amount), total: num(so[0].total), estDaysMin: so[0].est_days_min, estDaysMax: so[0].est_days_max, warrantyDays: so[0].warranty_days, note: so[0].note }
+  }
   out.invoice = inv.rows[0] ? { id: inv.rows[0].id, number: inv.rows[0].doc_number, docType: inv.rows[0].doc_type } : null
   return out
 }

@@ -142,6 +142,16 @@ d('repair marketplace', () => {
       expect(list.offers[0].vendorId).toBe(T.vendD.vendorId)
     })
 
+    it('a hand-written quote line remembers which repair it is for, and refuses unknown repair types', async () => {
+      const r = await call('POST', C, T.cust, body())
+      const lines = [{ kind: 'PART', description: 'Display', unitPrice: 2000, problemCategory: 'SCREEN' }]
+      const ok = await call('POST', `${M}/market/incoming/${r.data.id}/offer`, T.vendD, { lines })
+      expect(ok.status, JSON.stringify(ok.body)).toBe(201)
+      expect(ok.data.lines[0].problemCategory).toBe('SCREEN')
+      const bad = await call('POST', `${M}/market/incoming/${r.data.id}/offer`, T.vendD, { lines: [{ ...lines[0], problemCategory: 'NOPE' }] })
+      expect(bad.status).toBe(422)
+    })
+
     it('rejects bad quotes: client totals are ignored, bad prices and foreign items are refused', async () => {
       const bad = await call('POST', `${M}/market/incoming/${id}/offer`, T.vendD, { lines: [{ kind: 'PART', description: 'x', unitPrice: -5 }] })
       expect(bad.status).toBe(422)
@@ -388,9 +398,23 @@ d('repair marketplace', () => {
       const sg = await call('GET', `${M}/market/incoming/${r.data.id}/suggested-quote`, T.vendA)
       expect(sg.status, JSON.stringify(sg.body)).toBe(200)
       expect(sg.data.lines).toHaveLength(2)
+      expect(sg.data.lines.every((l) => l.problemCategory === 'SCREEN')).toBe(true)
       expect(sg.data.missing).toEqual([expect.objectContaining({ problemCategory: 'CAMERA' })])
       expect(sg.data.totals.total).toBe(4720)
       expect((await call('GET', `${M}/market/incoming/${r.data.id}/suggested-quote`, T.vendC)).status).toBe(404)
+    })
+
+    it('the assigned service centre sees the agreed offer price before confirming it; the customer view does not carry it', async () => {
+      const r = await call('POST', C, T.cust, body())
+      const x = r.data.id
+      const offer = (await call('GET', `${C}/${x}/offers?sort=nearest`, T.cust)).data.offers[0]
+      await call('POST', `${C}/${x}/offers/${offer.id}/select`, T.cust, { fulfilment: 'SHOP_VISIT', appointmentAt: tomorrow() })
+      const w = offer.vendorId === T.vendA.vendorId ? T.vendA : T.vendB
+      const job = (await call('GET', `${M}/${x}`, w)).data
+      expect(job.status).toBe('ACCEPTED')
+      expect(job.selectedOffer).toMatchObject({ total: offer.total, warrantyDays: expect.any(Number) })
+      expect(job.selectedOffer.lines.length).toBeGreaterThan(0)
+      expect((await call('GET', `${C}/${x}`, T.cust)).data.selectedOffer).toBeUndefined()
     })
 
     it('the vendor posts repair updates (visible in the timeline) and lists active / completed orders by tab', async () => {
@@ -406,6 +430,60 @@ d('repair marketplace', () => {
       const active = (await call('GET', `${M}?tab=active`, w)).data
       expect(active.items.map((i) => i.id)).toContain(x)
       expect((await call('GET', `${M}?tab=completed`, w)).data.items.map((i) => i.id)).not.toContain(x)
+    })
+
+    it('a vendor can reject a request (Rejected tab), reconsider it, and quoting clears the rejection', async () => {
+      const r = await call('POST', C, T.cust, body())
+      const x = r.data.id
+      const ids = async (tab, w) => (await call('GET', `${M}/market/incoming?tab=${tab}`, w)).data
+      expect((await ids('all', T.vendD)).items.map((i) => i.id)).toContain(x)
+      expect((await call('POST', `${M}/market/incoming/${x}/decline`, T.cust, {})).status).toBe(403)
+      expect((await call('POST', `${M}/market/incoming/${x}/decline`, T.vendC, {})).status).toBe(404)   // out of range
+      const rej = await call('POST', `${M}/market/incoming/${x}/decline`, T.vendD, { reason: 'Too busy' })
+      expect(rej.status, JSON.stringify(rej.body)).toBe(200)
+      const all = await ids('all', T.vendD)
+      expect(all.items.map((i) => i.id)).not.toContain(x)
+      const rejected = await ids('rejected', T.vendD)
+      expect(rejected.items.map((i) => i.id)).toContain(x)
+      expect(rejected.counts.rejected).toBe(rejected.items.length)
+      // other vendors are unaffected
+      expect((await ids('all', T.vendA)).items.map((i) => i.id)).toContain(x)
+      expect((await call('DELETE', `${M}/market/incoming/${x}/decline`, T.vendD)).status).toBe(200)
+      expect((await ids('all', T.vendD)).items.map((i) => i.id)).toContain(x)
+      // rejecting after quoting withdraws the quote; quoting again clears the rejection
+      const lines = [{ kind: 'PART', description: 'Display', unitPrice: 2000 }]
+      expect((await call('POST', `${M}/market/incoming/${x}/offer`, T.vendD, { lines })).status).toBe(201)
+      expect((await call('POST', `${M}/market/incoming/${x}/decline`, T.vendD, {})).status).toBe(200)
+      expect((await call('GET', `${C}/${x}/offers`, T.cust)).data.offers.map((o) => o.vendorId)).not.toContain(T.vendD.vendorId)
+      expect((await call('POST', `${M}/market/incoming/${x}/offer`, T.vendD, { lines })).status).toBe(201)
+      expect((await ids('rejected', T.vendD)).items.map((i) => i.id)).not.toContain(x)
+    })
+
+    it('records device-check rows and per-issue progress with the part used; hidden updates stay off the customer timeline', async () => {
+      const r = await call('POST', C, T.cust, body())
+      const x = r.data.id
+      const item = r.data.items[0].id
+      const offer = (await call('GET', `${C}/${x}/offers?sort=nearest`, T.cust)).data.offers[0]
+      await call('POST', `${C}/${x}/offers/${offer.id}/select`, T.cust, { fulfilment: 'SHOP_VISIT', appointmentAt: tomorrow() })
+      const w = offer.vendorId === T.vendA.vendorId ? T.vendA : T.vendB
+      const check = await call('POST', `${M}/${x}/update`, w, { stage: 'DIAGNOSING', note: 'Battery low', checks: [{ key: 'screen', label: 'Screen', result: 'ISSUE' }, { key: 'battery', result: 'LOW' }] })
+      expect(check.status, JSON.stringify(check.body)).toBe(200)
+      expect(check.data.timeline.at(-1).progress.checks).toEqual([{ key: 'SCREEN', label: 'Screen', result: 'ISSUE' }, { key: 'BATTERY', label: 'BATTERY', result: 'LOW' }])
+      expect((await call('POST', `${M}/${x}/update`, w, { stage: 'DIAGNOSING', checks: [{ key: 'screen', result: 'GREAT' }] })).status).toBe(422)
+      const done = await call('POST', `${M}/${x}/update`, w, { stage: 'REPAIR_IN_PROGRESS', issue: 'SCREEN', issueStatus: 'DONE', itemId: item, part: { name: 'OEM display', price: 3500, warrantyDays: 90 } })
+      expect(done.status, JSON.stringify(done.body)).toBe(200)
+      const last = done.data.timeline.at(-1)
+      expect(last.label).toMatch(/Display replacement completed/)
+      expect(last.progress).toMatchObject({ issue: 'SCREEN', issueStatus: 'DONE', itemId: item, part: { name: 'OEM display', price: 3500, warrantyDays: 90 } })
+      expect((await call('POST', `${M}/${x}/update`, w, { stage: 'OTHER', issueStatus: 'DONE' })).status).toBe(422)          // status needs an issue
+      expect((await call('POST', `${M}/${x}/update`, w, { stage: 'OTHER', issue: 'NOPE', issueStatus: 'DONE' })).status).toBe(422)
+      expect((await call('POST', `${M}/${x}/update`, w, { stage: 'OTHER', issue: 'SCREEN', issueStatus: 'DONE', itemId: '00000000-0000-4000-8000-000000000000' })).status).toBe(422)
+      expect((await call('POST', `${M}/${x}/update`, w, { stage: 'OTHER', issue: 'BATTERY', issueStatus: 'STARTED', part: { price: 5 } })).status).toBe(422)   // part needs a name
+      await call('POST', `${M}/${x}/update`, w, { stage: 'TESTING', note: 'internal only', notify: false })
+      const mine = (await call('GET', `${C}/${x}`, T.cust)).data.timeline.map((t) => t.label)
+      expect(mine.some((l) => /internal only/.test(l))).toBe(false)
+      expect(mine.some((l) => /Display replacement completed/.test(l))).toBe(true)
+      expect((await call('GET', `${M}/${x}`, w)).data.timeline.some((t) => /internal only/.test(t.label))).toBe(true)
     })
   })
 })

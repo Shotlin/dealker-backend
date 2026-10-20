@@ -206,8 +206,8 @@ function priceRequest(items, services) {
       const svc = matches.find((s) => s.model != null) || matches[0]   // a model-specific price wins over the brand-wide one
       if (!svc) return null
       const label = `${it.brand} ${it.model} — ${svc.title}`
-      if (Number(svc.parts_price) > 0) lines.push({ itemId: it.id, kind: 'PART', description: `${label} (parts)`, qty: 1, unitPrice: Number(svc.parts_price), serviceCode: svc.id })
-      if (Number(svc.labour_price) > 0) lines.push({ itemId: it.id, kind: 'LABOUR', description: `${label} (labour)`, qty: 1, unitPrice: Number(svc.labour_price), serviceCode: svc.id })
+      if (Number(svc.parts_price) > 0) lines.push({ itemId: it.id, kind: 'PART', description: `${label} (parts)`, qty: 1, unitPrice: Number(svc.parts_price), serviceCode: svc.id, problemCategory: issue })
+      if (Number(svc.labour_price) > 0) lines.push({ itemId: it.id, kind: 'LABOUR', description: `${label} (labour)`, qty: 1, unitPrice: Number(svc.labour_price), serviceCode: svc.id, problemCategory: issue })
       daysMin = Math.max(daysMin, svc.est_days_min); daysMax = Math.max(daysMax, svc.est_days_max)
       warranty = Math.min(warranty, svc.warranty_days); pickup = pickup && svc.pickup_delivery
     }
@@ -281,7 +281,7 @@ async function vendorCanSee(vendorId, req) {
   return nearestShop(shops, req, s.search_radius_km)
 }
 
-/** Open requests near a vendor. tab: new (not quoted yet) | quoted | all. */
+/** Open requests near a vendor. tab: new (not quoted yet) | quoted | all (new + quoted) | rejected (this vendor passed on them). */
 export async function listIncoming(actor, f = {}) {
   if (actor.kind !== 'VENDOR' || !actor.vendorId) throw new RepairError('FORBIDDEN', 'Service centre access required', 403)
   const s = await getSettings()
@@ -290,7 +290,7 @@ export async function listIncoming(actor, f = {}) {
     `SELECT COUNT(*) FILTER (WHERE status = ANY($2))::int AS accepted, COUNT(*) FILTER (WHERE status = 'COMPLETED')::int AS completed
        FROM repair_requests WHERE assigned_vendor_id = $1 AND flow = 'MARKETPLACE'`, [actor.vendorId, TABS.active])
   const done = { accepted: cc[0].accepted, completed: cc[0].completed }
-  if (!shops.length) return { items: [], total: 0, counts: { new: 0, quoted: 0, ...done } }
+  if (!shops.length) return { items: [], total: 0, counts: { new: 0, quoted: 0, rejected: 0, ...done } }
   const { rows } = await query(
     `SELECT r.* FROM repair_requests r
       WHERE r.flow = 'MARKETPLACE' AND r.status = 'REQUESTED' AND r.offers_close_at > NOW()
@@ -298,18 +298,22 @@ export async function listIncoming(actor, f = {}) {
   const mine = []
   for (const r of rows) { const near = nearestShop(shops, r, s.search_radius_km); if (near) mine.push({ r, near }) }
   const ids = mine.map((m) => m.r.id)
-  const [{ rows: items }, { rows: offers }] = ids.length
+  const [{ rows: items }, { rows: offers }, { rows: declines }] = ids.length
     ? await Promise.all([
       query('SELECT * FROM repair_items WHERE request_id = ANY($1) ORDER BY request_id, line_no', [ids]),
       query(`SELECT * FROM repair_offers WHERE request_id = ANY($1) AND vendor_id = $2`, [ids, actor.vendorId]),
+      query(`SELECT request_id FROM repair_request_declines WHERE request_id = ANY($1) AND vendor_id = $2`, [ids, actor.vendorId]),
     ])
-    : [{ rows: [] }, { rows: [] }]
+    : [{ rows: [] }, { rows: [] }, { rows: [] }]
   const offerBy = new Map(offers.map((o) => [o.request_id, o]))
-  const all = mine.map(({ r, near }) => vendorRequestView(r, items.filter((i) => i.request_id === r.id), offerBy.get(r.id) || null, near.distanceKm))
+  const declined = new Set(declines.map((d) => d.request_id))
+  const view = ({ r, near }) => vendorRequestView(r, items.filter((i) => i.request_id === r.id), offerBy.get(r.id) || null, near.distanceKm)
+  const all = mine.filter((m) => !declined.has(m.r.id)).map(view)
+  const rejected = mine.filter((m) => declined.has(m.r.id)).map(view)
   const quoted = all.filter((x) => x.offer && x.offer.status !== 'WITHDRAWN')
   const fresh = all.filter((x) => !quoted.includes(x))
-  const counts = { new: fresh.length, quoted: quoted.length, ...done }
-  const list = f.tab === 'quoted' ? quoted : f.tab === 'all' ? all : fresh
+  const counts = { new: fresh.length, quoted: quoted.length, rejected: rejected.length, ...done }
+  const list = f.tab === 'quoted' ? quoted : f.tab === 'all' ? all : f.tab === 'rejected' ? rejected : fresh
   return { items: list, total: list.length, counts }
 }
 
@@ -347,7 +351,8 @@ function cleanOfferLines(raw, items) {
     const qty = int(l.qty ?? 1, `Line ${n + 1} quantity`, 1, 1000, 1)
     const unitPrice = price(l.unitPrice, `Line ${n + 1}`)
     if (l.itemId != null && !ids.has(l.itemId)) throw new RepairError('VALIDATION', `Line ${n + 1}: that device is not on this request`, 422)
-    return { itemId: l.itemId ?? (items.length === 1 ? items[0].id : null), kind: l.kind, description, qty, unitPrice }
+    if (l.problemCategory != null && !PROBLEMS.includes(l.problemCategory)) throw new RepairError('VALIDATION', `Line ${n + 1}: unknown repair type`, 422)
+    return { itemId: l.itemId ?? (items.length === 1 ? items[0].id : null), kind: l.kind, description, qty, unitPrice, ...(l.problemCategory ? { problemCategory: l.problemCategory } : {}) }
   })
 }
 
@@ -387,6 +392,7 @@ export async function placeOffer(actor, requestId, input = {}) {
       [requestId, vendorId, JSON.stringify(q.lines), q.subtotal, q.taxPct, q.taxAmount, q.total, mrp, daysMin, daysMax,
         int(input.warrantyDays, 'Warranty days', 0, 730, s.default_warranty_days), input.pickupDelivery !== false, input.shopVisit !== false,
         near.distanceKm, text(input.note, 500) || null, String(s.estimate_validity_days), actor.userId])
+    await client.query('DELETE FROM repair_request_declines WHERE request_id = $1 AND vendor_id = $2', [requestId, vendorId])
     await addEvent(client, requestId, 'OFFERS', `A repair shop sent a quote — ₹${q.total}`, actor, { meta: { vendorId, total: q.total } })
     return o[0]
   })
@@ -707,8 +713,8 @@ export async function suggestedQuote(actor, requestId, vendorIdIn) {
       const sv = m.find((x) => x.model != null) || m[0]
       if (!sv) { missing.push({ itemId: it.id, problemCategory: issue, label: TITLES[issue] }); continue }
       const label = `${it.brand} ${it.model} — ${sv.title}`
-      if (Number(sv.parts_price) > 0) lines.push({ itemId: it.id, kind: 'PART', description: `${label} (parts)`, qty: 1, unitPrice: Number(sv.parts_price) })
-      if (Number(sv.labour_price) > 0) lines.push({ itemId: it.id, kind: 'LABOUR', description: `${label} (labour)`, qty: 1, unitPrice: Number(sv.labour_price) })
+      if (Number(sv.parts_price) > 0) lines.push({ itemId: it.id, kind: 'PART', description: `${label} (parts)`, qty: 1, unitPrice: Number(sv.parts_price), problemCategory: issue })
+      if (Number(sv.labour_price) > 0) lines.push({ itemId: it.id, kind: 'LABOUR', description: `${label} (labour)`, qty: 1, unitPrice: Number(sv.labour_price), problemCategory: issue })
       daysMin = Math.max(daysMin, sv.est_days_min); daysMax = Math.max(daysMax, sv.est_days_max); warranty = Math.min(warranty, sv.warranty_days)
     }
   }
@@ -718,21 +724,89 @@ export async function suggestedQuote(actor, requestId, vendorIdIn) {
 }
 
 const UPDATE_STAGES = ['RECEIVED', 'DIAGNOSING', 'WAITING_FOR_PARTS', 'REPAIR_IN_PROGRESS', 'TESTING', 'OTHER']
+const ISSUE_STATUSES = ['STARTED', 'DONE', 'NOT_NEEDED']
+const CHECK_RESULTS = ['PASS', 'LOW', 'ISSUE']
 
-/** Technician progress note with optional photos; the customer sees it in their timeline when `notify` is set. */
-export const addRepairUpdate = (actor, id, { stage, note, notify, mediaIds } = {}) => tx(async (client) => {
+/** Device-check rows ("Screen — pass", "Battery — low"): at most 20, plain keys, one of three results. */
+function cleanChecks(raw) {
+  if (raw == null) return null
+  if (!Array.isArray(raw) || raw.length > 20) throw new RepairError('VALIDATION', 'Device check has too many rows', 422)
+  return raw.map((c, n) => {
+    const key = text(c?.key, 40).toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+    if (!key) throw new RepairError('VALIDATION', `Check ${n + 1}: name is missing`, 422)
+    if (!CHECK_RESULTS.includes(c.result)) throw new RepairError('VALIDATION', `Check ${n + 1}: choose pass, low or issue`, 422)
+    return { key, label: text(c.label, 60) || key, result: c.result }
+  })
+}
+
+/** The part used for one repair (name, price, warranty) — shown to the customer with the progress update. */
+function cleanPart(raw) {
+  if (raw == null) return null
+  const name = text(raw.name, 120)
+  if (!name) throw new RepairError('VALIDATION', 'Part name is required', 422)
+  return {
+    name,
+    price: raw.price != null && raw.price !== '' ? price(raw.price, 'Part price') : null,
+    warrantyDays: int(raw.warrantyDays, 'Part warranty days', 0, 730, 0),
+  }
+}
+
+/**
+ * Technician progress note with optional photos; the customer sees it in their timeline when `notify` is set.
+ * Per-issue progress ("Battery replacement — done") rides on the same event: `issue` (one of the request's issues),
+ * `issueStatus`, optional `part` and `itemId`; the diagnosis screen sends `checks`.
+ */
+export const addRepairUpdate = (actor, id, { stage, note, notify, mediaIds, issue, issueStatus, itemId, part, checks } = {}) => tx(async (client) => {
   if (actor.kind === 'CUSTOMER') throw new RepairError('FORBIDDEN', 'Only repair staff can do this', 403)
   const r = await lock(client, id, actor)
   if (!['ACCEPTED', 'INSPECTION', 'ESTIMATE_APPROVED', 'IN_REPAIR', 'QC_PENDING'].includes(r.status)) throw new RepairError('INVALID_STATE', 'Updates can be added while the repair is under way', 409)
   if (!UPDATE_STAGES.includes(stage)) throw new RepairError('VALIDATION', 'Choose an update type', 422)
+  if (issue != null && !PROBLEMS.includes(issue)) throw new RepairError('VALIDATION', 'Unknown repair type', 422)
+  if (issueStatus != null && !ISSUE_STATUSES.includes(issueStatus)) throw new RepairError('VALIDATION', 'Choose started, done or not needed', 422)
+  if (issueStatus != null && issue == null) throw new RepairError('VALIDATION', 'Say which repair this status is for', 422)
+  if (itemId != null) {
+    const { rows } = await client.query('SELECT 1 FROM repair_items WHERE id = $1 AND request_id = $2', [itemId, id])
+    if (!rows[0]) throw new RepairError('VALIDATION', 'That device is not on this request', 422)
+  }
+  const cleanedChecks = cleanChecks(checks)
+  const cleanedPart = cleanPart(part)
   const n = text(note, 1000)
-  if (!n && !(Array.isArray(mediaIds) && mediaIds.length)) throw new RepairError('VALIDATION', 'Add a note or photos', 422)
+  if (!n && !(Array.isArray(mediaIds) && mediaIds.length) && !issueStatus && !cleanedChecks) throw new RepairError('VALIDATION', 'Add a note or photos', 422)
   if (Array.isArray(mediaIds) && mediaIds.length) {
     const { claimRepairMedia } = await import('./repairs.media.js')
     await claimRepairMedia(client, r, actor, mediaIds, 'REPAIR_PROGRESS')
   }
   const visible = notify !== false
-  await addEvent(client, id, 'TECH_UPDATE', `${stage.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase())}${n ? ` — ${n}` : ''}`, actor, { meta: { stage, customerVisible: visible } })
+  const head = issue && issueStatus
+    ? `${TITLES[issue]} ${{ STARTED: 'started', DONE: 'completed', NOT_NEEDED: 'not needed' }[issueStatus]}`
+    : stage.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase())
+  await addEvent(client, id, 'TECH_UPDATE', `${head}${n ? ` — ${n}` : ''}`, actor, {
+    meta: { stage, customerVisible: visible, issue: issue ?? undefined, issueStatus: issueStatus ?? undefined, itemId: itemId ?? undefined, part: cleanedPart ?? undefined, checks: cleanedChecks ?? undefined },
+  })
   await patch(client, id, {})
   return visible
 }).then((visible) => { if (visible) notifyRepair('UPDATE', id); return getManage(actor, id) })
+
+// ── vendor "Reject" on an incoming request ──────────────────────────────
+
+/** The vendor passes on a request: it leaves New/Pending (and any open quote is withdrawn) and shows under Rejected. */
+export async function declineRequest(actor, requestId, { reason } = {}) {
+  if (actor.kind !== 'VENDOR' || !actor.vendorId) throw new RepairError('FORBIDDEN', 'Service centre access required', 403)
+  const { rows } = await query(`SELECT * FROM repair_requests WHERE id = $1 AND flow = 'MARKETPLACE' AND status = 'REQUESTED'`, [requestId])
+  if (!rows[0] || !(await vendorCanSee(actor.vendorId, rows[0]))) throw new RepairError('NOT_FOUND', 'Repair request not found', 404)
+  const why = text(reason, 200) || null
+  await tx(async (client) => {
+    await client.query(
+      `INSERT INTO repair_request_declines (request_id, vendor_id, reason) VALUES ($1,$2,$3)
+       ON CONFLICT (request_id, vendor_id) DO UPDATE SET reason = EXCLUDED.reason, created_at = NOW()`, [requestId, actor.vendorId, why])
+    await client.query(`UPDATE repair_offers SET status = 'WITHDRAWN', updated_at = NOW() WHERE request_id = $1 AND vendor_id = $2 AND status = 'OPEN'`, [requestId, actor.vendorId])
+  })
+  return { declined: true }
+}
+
+/** Put a rejected request back into Pending (while quotes are still open). */
+export async function undeclineRequest(actor, requestId) {
+  if (actor.kind !== 'VENDOR' || !actor.vendorId) throw new RepairError('FORBIDDEN', 'Service centre access required', 403)
+  await query('DELETE FROM repair_request_declines WHERE request_id = $1 AND vendor_id = $2', [requestId, actor.vendorId])
+  return { declined: false }
+}

@@ -156,6 +156,8 @@ export async function repairsManageRoutes(fastify) {
   }))
   fastify.post(`${incoming}/offer`, { preHandler: pre(doStaff), schema: { params: idParams } }, wrap(async (request, reply) => reply.code(201).send(ok(await market.placeOffer(actorOf(request), request.params.id, request.body || {})))))
   fastify.delete(`${incoming}/offer`, { preHandler: pre(doStaff), schema: { params: idParams } }, wrap(async (request) => ok(await market.withdrawOffer(actorOf(request), request.params.id, request.query?.vendorId))))
+  fastify.post(`${incoming}/decline`, { preHandler: pre(doStaff), schema: { params: idParams } }, wrap(async (request) => ok(await market.declineRequest(actorOf(request), request.params.id, request.body || {}))))
+  fastify.delete(`${incoming}/decline`, { preHandler: pre(doStaff), schema: { params: idParams } }, wrap(async (request) => ok(await market.undeclineRequest(actorOf(request), request.params.id))))
   fastify.get('/market/services', { preHandler: pre(view) }, wrap(async (request) => ok(await market.listServices(actorOf(request), request.query || {}))))
   fastify.post('/market/services', { preHandler: pre(doStaff) }, wrap(async (request, reply) => reply.code(201).send(ok(await market.createService(actorOf(request), request.body || {})))))
   fastify.post('/market/services/bulk', { preHandler: pre(doStaff) }, wrap(async (request, reply) => reply.code(201).send(ok(await market.saveServices(actorOf(request), request.body || {})))))

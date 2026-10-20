@@ -73,6 +73,8 @@ Settings (`/config/settings`): `marketplaceEnabled`, `autoQuoteEnabled`, `search
 | Active Orders (All / In progress / Completed, call, details) | `GET /?tab=active|completed` · `GET /:id` · customer phone is in the detail once chosen |
 | Repair Process (Received → Repair → QC → Ready → Delivered, updates, photos/video, technician note, notify customer, mark completed) | `POST /:id/receive` · `/start` · `/send-to-qc` · `/qc` · `/ready` · `/out-for-delivery` · `/deliver` · `POST /:id/update {stage,note,notify,mediaIds}` · uploads `POST /media` + `POST /:id/media {stage:'REPAIR_PROGRESS'}` · payments `POST /:id/payments` |
 
+**Added 2026-10-20 (migration 214):** vendor Reject `POST|DELETE /market/incoming/:id/decline` (+ `?tab=rejected`, `counts.rejected`); `POST /:id/update` accepts `issue`, `issueStatus`, `itemId`, `part`, `checks` (see root PROGRESS.md); quote lines carry `problemCategory`; staff job detail returns `selectedOffer`, `money.agreedTotal`.
+
 Error codes added: `OUT_OF_RANGE, OFFERS_CLOSED, OFFERS_FULL, OFFER_UNAVAILABLE, OFFER_EXPIRED, FULFILMENT_UNAVAILABLE, ALREADY_RATED, DUPLICATE`.
 
 Not built: the vendor mobile app and customer mobile screens; vendor push notification when a nearby request arrives; auto-expiry of requests nobody picked an offer for; chat; online payment of the advance.
