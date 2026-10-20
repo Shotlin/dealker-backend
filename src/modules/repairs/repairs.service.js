@@ -183,9 +183,9 @@ export async function createRequest(actor, input = {}) {
   }
 
   // Marketplace: a consumer request that nearby vendors quote on (the customer sends their address/location, or marketplace:true).
-  // Staff-booked and business requests, and requests without a location, stay on the direct (admin-assigned) flow.
+  // Staff-booked requests and requests without a location stay on the direct (admin-assigned) flow. Business (bulk) requests quote like consumer ones.
   const wantsQuotes = input.marketplace === true || !!input.addressId || !!input.location
-  const marketplace = actor.kind === 'CUSTOMER' && channel === 'B2C' && s.marketplace_enabled && input.marketplace !== false && wantsQuotes
+  const marketplace = actor.kind === 'CUSTOMER' && s.marketplace_enabled && input.marketplace !== false && wantsQuotes
   let loc = { lat: null, lng: null, pincode: null, address: null }
   if (marketplace) {
     if (input.addressId) {
@@ -280,10 +280,10 @@ function serialize(r, { actor, items = [], quotes = [], payments = [], events = 
     location: r.flow === 'MARKETPLACE' ? { lat: num(r.customer_lat), lng: num(r.customer_lng), pincode: r.customer_pincode } : null,
     rating: r.rating != null ? { stars: r.rating, review: r.review, at: r.rated_at?.toISOString() ?? null } : null,
     description: r.description,
-    serviceCenterId: r.assigned_vendor_id, serviceCenter: r.vendor_name || null, technician: r.technician_name || null,
+    serviceCenterId: r.assigned_vendor_id, serviceCenter: r.vendor_name || null, technician: r.technician_name || null, technicianPhone: r.technician_phone || null,
     deviceReceivedAt: r.device_received_at?.toISOString() ?? null,
     money: {
-      approvedTotal: num(r.approved_total), agreedTotal: r.approved_total != null ? num(r.approved_total) : (r.offer_total != null ? num(r.offer_total) : null), advanceRequired: num(r.advance_required), amountPaid: num(r.amount_paid), amountDue: due,
+      approvedTotal: num(r.approved_total), agreedTotal: Number(r.approved_total) > 0 ? num(r.approved_total) : (r.offer_total != null ? num(r.offer_total) : null), advanceRequired: num(r.advance_required), amountPaid: num(r.amount_paid), amountDue: due,
       refundable: refundable(r), dueDate: ymd(r.due_date),
       overdue: !!(r.due_date && ymd(r.due_date) < today && due > 0),
     },
@@ -306,11 +306,12 @@ function serialize(r, { actor, items = [], quotes = [], payments = [], events = 
     timeline: events
       .filter((e) => !(customerView && e.kind === 'TECH_UPDATE' && e.meta?.customerVisible === false))
       .map((e) => {
-        const t = { kind: e.kind, label: e.label, at: e.created_at.toISOString(), from: e.from_status, to: e.to_status }
-        if (e.kind === 'TECH_UPDATE' && e.meta) {
-          const { stage, issue, issueStatus, itemId, part, checks } = e.meta
-          t.progress = { stage: stage ?? null, issue: issue ?? null, issueStatus: issueStatus ?? null, itemId: itemId ?? null, part: part ?? null, checks: checks ?? null }
+        const t = { id: Number(e.id), kind: e.kind, label: e.label, at: e.created_at.toISOString(), from: e.from_status, to: e.to_status }
+        if ((e.kind === 'TECH_UPDATE' || e.kind === 'QC_MISMATCH') && e.meta) {
+          const { stage, issue, issueStatus, itemId, part, checks, photos, title, note } = e.meta
+          t.progress = { stage: stage ?? null, issue: issue ?? null, issueStatus: issueStatus ?? null, itemId: itemId ?? null, part: part ?? null, checks: checks ?? null, photos: photos ?? null, title: title ?? null, note: note ?? null }
         }
+        if (e.kind === 'QC_MISMATCH_RESPONSE' && e.meta) t.response = { mismatchId: Number(e.meta.mismatchId), choice: e.meta.choice }
         return t
       }),
     media,
@@ -348,6 +349,10 @@ async function loadDetail(r, actor) {
   if (r.selected_offer_id && actor.kind !== 'CUSTOMER') {
     const { rows: so } = await query('SELECT lines, subtotal, tax_pct, tax_amount, total, est_days_min, est_days_max, warranty_days, note FROM repair_offers WHERE id = $1', [r.selected_offer_id])
     if (so[0]) out.selectedOffer = { lines: so[0].lines, subtotal: num(so[0].subtotal), taxPct: num(so[0].tax_pct), taxAmount: num(so[0].tax_amount), total: num(so[0].total), estDaysMin: so[0].est_days_min, estDaysMax: so[0].est_days_max, warrantyDays: so[0].warranty_days, note: so[0].note }
+  }
+  if (r.assigned_vendor_id) {
+    const { rows: un } = await query(`SELECT COUNT(*)::int AS n FROM repair_messages WHERE request_id = $1 AND sender_role = $2 AND read_at IS NULL`, [r.id, actor.kind === 'CUSTOMER' ? 'VENDOR' : 'CUSTOMER'])
+    out.unreadMessages = un[0].n
   }
   out.invoice = inv.rows[0] ? { id: inv.rows[0].id, number: inv.rows[0].doc_number, docType: inv.rows[0].doc_type } : null
   return out

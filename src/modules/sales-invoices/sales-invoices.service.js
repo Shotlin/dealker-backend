@@ -289,11 +289,19 @@ export async function issueForRepair(repairId, actor) {
       const q = qs[0]
       const rate = Number(q.tax_pct)
       const discPct = Number(q.discount_pct)
-      lines = q.lines.map((l, n) => {
-        const gross = Math.round(l.qty * p(l.unitPrice))
+      // An offer discount is stored as a negative line; on the invoice it is spread over the priced lines as a per-line discount.
+      const grossOf = (l) => Math.round(l.qty * p(l.unitPrice))
+      const discountPool = q.lines.filter((l) => grossOf(l) < 0).reduce((a, l) => a - grossOf(l), 0)
+      const priced = q.lines.map((l, n) => ({ l, n })).filter(({ l }) => grossOf(l) >= 0)
+      const pricedGross = priced.reduce((a, { l }) => a + grossOf(l), 0)
+      let left = discountPool
+      lines = priced.map(({ l, n }, k) => {
+        const gross = grossOf(l)
+        const share = k === priced.length - 1 ? left : Math.min(left, Math.round((discountPool * gross) / (pricedGross || 1)))
+        left -= share
         return {
           description: [label(byId.get(l.itemId)), l.description].filter(Boolean).join(' — '), hsnSac: l.kind === 'PART' ? settings.repair_parts_hsn : settings.repair_service_sac,
-          unit: 'NOS', qty: l.qty, unitPrice: l.unitPrice, discount: r2(Math.round((gross * discPct) / 100)), taxRate: rate, meta: { line: n },
+          unit: 'NOS', qty: l.qty, unitPrice: l.unitPrice, discount: r2(Math.round((gross * discPct) / 100) + share), taxRate: rate, meta: { line: n },
         }
       })
     } else {

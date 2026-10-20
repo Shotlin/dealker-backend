@@ -12,6 +12,7 @@ import { isPlatformUser, requireVendorScope } from '../../middlewares/vendor-sco
 import { evidencePath, verifyEvidence } from '../sell-requests/evidence-storage.js'
 import * as admin from './repairs.admin.js'
 import * as market from './repairs.market.js'
+import * as pay from './repairs.pay.js'
 import * as media from './repairs.media.js'
 import * as svc from './repairs.service.js'
 
@@ -65,6 +66,13 @@ export async function repairsCustomerRoutes(fastify) {
   fastify.post('/:id/offers/:offerId/select', { preHandler: auth, schema: { params: offerParams } }, wrap(async (request) => ok(await market.selectOffer(me(request), request.params.id, request.params.offerId, request.body || {}))))
   fastify.get('/:id/tracking', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await market.tracking(me(request), request.params.id))))
   fastify.post('/:id/rate', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await market.rate(me(request), request.params.id, request.body || {}))))
+  fastify.get('/:id/messages', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await market.listMessages(me(request), request.params.id))))
+  fastify.post('/:id/messages', { preHandler: auth, schema: { params: idParams } }, wrap(async (request, reply) => reply.code(201).send(ok(await market.sendMessage(me(request), request.params.id, request.body || {})))))
+  fastify.post('/:id/mismatch/respond', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await market.respondMismatch(me(request), request.params.id, request.body || {}))))
+  fastify.get('/:id/pay', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await pay.options(me(request), request.params.id))))
+  fastify.post('/:id/pay/razorpay/order', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await pay.createOrder(me(request), request.params.id))))
+  fastify.post('/:id/pay/razorpay/verify', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await pay.verifyOnline(me(request), request.params.id, request.body || {}))))
+  fastify.post('/:id/pay/wallet', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ok(await pay.payWallet(me(request), request.params.id, request.body || {}))))
 
   fastify.post('/', { preHandler: auth }, wrap(async (request, reply) => reply.code(201).send(ok(await svc.createRequest(me(request), request.body || {})))))
   fastify.get('/mine', { preHandler: auth }, wrap(async (request) => {
@@ -172,6 +180,10 @@ export async function repairsManageRoutes(fastify) {
   fastify.put('/market/profile', { preHandler: pre(doStaff) }, wrap(async (request) => ok(await market.setProfile(actorOf(request), request.body || {}))))
   fastify.get(`${incoming}/suggested-quote`, { preHandler: pre(view), schema: { params: idParams } }, wrap(async (request) => ok(await market.suggestedQuote(actorOf(request), request.params.id, request.query?.vendorId))))
   act('update', doStaff, (a, id, b) => market.addRepairUpdate(a, id, b))
+  act('mismatch', doStaff, (a, id, b) => market.reportMismatch(a, id, b))
+  fastify.put('/:id/technician', { preHandler: pre(doStaff), schema: { params: idParams } }, wrap(async (request) => ok(await market.setTechnician(actorOf(request), request.params.id, request.body || {}))))
+  fastify.get('/:id/messages', { preHandler: pre(view), schema: { params: idParams } }, wrap(async (request) => ok(await market.listMessages(actorOf(request), request.params.id))))
+  fastify.post('/:id/messages', { preHandler: pre(doStaff), schema: { params: idParams } }, wrap(async (request, reply) => reply.code(201).send(ok(await market.sendMessage(actorOf(request), request.params.id, request.body || {})))))
   act('confirm-price', doStaff, (a, id) => market.confirmPrice(a, id))
   act('generate-offers', doPlatform, async (a, id) => { await market.generateOffers(id); return svc.getManage(a, id) })
 

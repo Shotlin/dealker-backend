@@ -260,7 +260,22 @@ export async function generateOffers(requestId) {
 // ── vendor: incoming requests and hand-written quotes ───────────────────
 
 /** Anonymised request view for a vendor that has not been chosen. */
-function vendorRequestView(r, items, offer, distanceKm) {
+/** What this shop's own price list says the request would cost (with GST). `complete` is false when some issue has no price. */
+function estimateFor(items, services, taxPct) {
+  let sub = 0, missing = false
+  for (const it of items) {
+    for (const issue of it.problem_categories?.length ? it.problem_categories : [it.problem_category]) {
+      const m = services.filter((x) => x.device_category === it.category && x.problem_category === issue && x.brand.toLowerCase() === it.brand.toLowerCase()
+        && (x.model == null || x.model.toLowerCase() === it.model.toLowerCase()))
+      const sv = m.find((x) => x.model != null) || m[0]
+      if (!sv) { missing = true; continue }
+      sub += Number(sv.parts_price) + Number(sv.labour_price)
+    }
+  }
+  return sub > 0 ? { total: money.rupees(Math.round(sub * 100 * (1 + taxPct / 100))), complete: !missing } : null
+}
+
+function vendorRequestView(r, items, offer, distanceKm, estimate = null) {
   const first = String(r.customer_name || 'Customer').trim().split(/\s+/)[0]
   return {
     id: r.id, code: r.code, status: r.status, createdAt: r.created_at.toISOString(), offersCloseAt: r.offers_close_at?.toISOString() ?? null,
@@ -272,6 +287,8 @@ function vendorRequestView(r, items, offer, distanceKm) {
       problemDescription: i.problem_description, warrantyStatus: i.warranty_status,
     })),
     offer: offer ? serializeOffer(offer) : null,
+    channel: r.channel, businessName: r.channel === 'B2B' ? r.business_name : null, deviceCount: items.length,
+    estimate,
   }
 }
 
@@ -307,7 +324,11 @@ export async function listIncoming(actor, f = {}) {
     : [{ rows: [] }, { rows: [] }, { rows: [] }]
   const offerBy = new Map(offers.map((o) => [o.request_id, o]))
   const declined = new Set(declines.map((d) => d.request_id))
-  const view = ({ r, near }) => vendorRequestView(r, items.filter((i) => i.request_id === r.id), offerBy.get(r.id) || null, near.distanceKm)
+  const { rows: svcs } = await query('SELECT * FROM repair_vendor_services WHERE vendor_id = $1 AND is_active', [actor.vendorId])
+  const view = ({ r, near }) => {
+    const its = items.filter((i) => i.request_id === r.id)
+    return vendorRequestView(r, its, offerBy.get(r.id) || null, near.distanceKm, estimateFor(its, svcs, Number(s.tax_pct)))
+  }
   const all = mine.filter((m) => !declined.has(m.r.id)).map(view)
   const rejected = mine.filter((m) => declined.has(m.r.id)).map(view)
   const quoted = all.filter((x) => x.offer && x.offer.status !== 'WITHDRAWN')
@@ -330,7 +351,8 @@ export async function getIncoming(actor, id) {
   ])
   const { rows: hist } = await query(`SELECT COUNT(*)::int AS n FROM repair_requests WHERE user_id = $1 AND status = 'COMPLETED'`, [req.user_id])
   req.customer_repairs = hist[0].n
-  const view = vendorRequestView(req, items, offers[0] || null, near.distanceKm)
+  const { rows: svcs } = await query('SELECT * FROM repair_vendor_services WHERE vendor_id = $1 AND is_active', [actor.vendorId])
+  const view = vendorRequestView(req, items, offers[0] || null, near.distanceKm, estimateFor(items, svcs, Number((await getSettings()).tax_pct)))
   view.media = media.map((m) => ({ id: m.id, type: m.media_type }))
   return view
 }
@@ -369,16 +391,22 @@ export async function placeOffer(actor, requestId, input = {}) {
     const near = await vendorCanSee(vendorId, req)
     if (!near) throw new RepairError('OUT_OF_RANGE', 'This request is outside your service area', 403)
     const { rows: items } = await client.query('SELECT * FROM repair_items WHERE request_id = $1 ORDER BY line_no', [requestId])
-    const lines = cleanOfferLines(input.lines, items)
-    const covered = new Set(lines.map((l) => l.itemId).filter(Boolean))
+    const priced = cleanOfferLines(input.lines, items)
+    const covered = new Set(priced.map((l) => l.itemId).filter(Boolean))
     if (items.length > 1 && items.some((i) => !covered.has(i.id))) throw new RepairError('UNPRICED_DEVICE', 'Price every device on the request', 422)
     const { rows: n } = await client.query(`SELECT COUNT(*)::int AS n FROM repair_offers WHERE request_id = $1 AND status = 'OPEN' AND vendor_id <> $2`, [requestId, vendorId])
     if (n[0].n >= s.max_offers) throw new RepairError('OFFERS_FULL', 'This request already has the maximum number of quotes', 409)
+    // "Offer price": the shop may give a discount on the priced repairs (bulk discount, special rate). It is stored as a
+    // negative line so every later total, quote and invoice follows from the lines; the undiscounted total becomes the struck-through price.
+    const gross = computeQuote({ lines: priced, discountPct: 0, taxPct: Number(s.tax_pct) })
+    const discount = input.discount != null && input.discount !== '' ? price(input.discount, 'Discount') : 0
+    if (discount >= gross.subtotal) throw new RepairError('VALIDATION', 'The discount must be less than the repair price', 422)
+    const lines = discount > 0 ? [...priced, { itemId: null, kind: 'OTHER', description: 'Offer discount', qty: 1, unitPrice: -discount }] : priced
     const q = computeQuote({ lines, discountPct: 0, taxPct: Number(s.tax_pct) })
     const daysMin = int(input.estDaysMin, 'Minimum days', 0, 60, 1)
     const daysMax = int(input.estDaysMax, 'Maximum days', 0, 60, Math.max(daysMin, 2))
     if (daysMax < daysMin) throw new RepairError('VALIDATION', 'Maximum days cannot be below minimum days', 422)
-    const mrp = input.mrpTotal != null && input.mrpTotal !== '' ? price(input.mrpTotal, 'Original price') : null
+    const mrp = discount > 0 ? gross.total : (input.mrpTotal != null && input.mrpTotal !== '' ? price(input.mrpTotal, 'Original price') : null)
     if (mrp != null && mrp < q.total) throw new RepairError('VALIDATION', 'Original price cannot be below the quote', 422)
     const { rows: o } = await client.query(
       `INSERT INTO repair_offers (request_id, vendor_id, source, status, lines, subtotal, tax_pct, tax_amount, total, mrp_total, est_days_min, est_days_max, warranty_days,
@@ -756,10 +784,10 @@ function cleanPart(raw) {
  * Per-issue progress ("Battery replacement — done") rides on the same event: `issue` (one of the request's issues),
  * `issueStatus`, optional `part` and `itemId`; the diagnosis screen sends `checks`.
  */
-export const addRepairUpdate = (actor, id, { stage, note, notify, mediaIds, issue, issueStatus, itemId, part, checks } = {}) => tx(async (client) => {
+export const addRepairUpdate = (actor, id, { stage, note, notify, mediaIds, beforeMediaIds, issue, issueStatus, itemId, part, checks } = {}) => tx(async (client) => {
   if (actor.kind === 'CUSTOMER') throw new RepairError('FORBIDDEN', 'Only repair staff can do this', 403)
   const r = await lock(client, id, actor)
-  if (!['ACCEPTED', 'INSPECTION', 'ESTIMATE_APPROVED', 'IN_REPAIR', 'QC_PENDING'].includes(r.status)) throw new RepairError('INVALID_STATE', 'Updates can be added while the repair is under way', 409)
+  if (!['ACCEPTED', 'INSPECTION', 'ESTIMATE_APPROVED', 'IN_REPAIR', 'QC_PENDING', 'REPAIRED', 'READY_FOR_DELIVERY'].includes(r.status)) throw new RepairError('INVALID_STATE', 'Updates can be added while the repair is under way', 409)
   if (!UPDATE_STAGES.includes(stage)) throw new RepairError('VALIDATION', 'Choose an update type', 422)
   if (issue != null && !PROBLEMS.includes(issue)) throw new RepairError('VALIDATION', 'Unknown repair type', 422)
   if (issueStatus != null && !ISSUE_STATUSES.includes(issueStatus)) throw new RepairError('VALIDATION', 'Choose started, done or not needed', 422)
@@ -771,17 +799,19 @@ export const addRepairUpdate = (actor, id, { stage, note, notify, mediaIds, issu
   const cleanedChecks = cleanChecks(checks)
   const cleanedPart = cleanPart(part)
   const n = text(note, 1000)
-  if (!n && !(Array.isArray(mediaIds) && mediaIds.length) && !issueStatus && !cleanedChecks) throw new RepairError('VALIDATION', 'Add a note or photos', 422)
-  if (Array.isArray(mediaIds) && mediaIds.length) {
+  if (!n && !(Array.isArray(mediaIds) && mediaIds.length) && !(Array.isArray(beforeMediaIds) && beforeMediaIds.length) && !issueStatus && !cleanedChecks) throw new RepairError('VALIDATION', 'Add a note or photos', 422)
+  const before = Array.isArray(beforeMediaIds) ? beforeMediaIds : []
+  const after = Array.isArray(mediaIds) ? mediaIds : []
+  if (before.length || after.length) {
     const { claimRepairMedia } = await import('./repairs.media.js')
-    await claimRepairMedia(client, r, actor, mediaIds, 'REPAIR_PROGRESS')
+    await claimRepairMedia(client, r, actor, [...before, ...after], 'REPAIR_PROGRESS', itemId ?? null)
   }
   const visible = notify !== false
   const head = issue && issueStatus
     ? `${TITLES[issue]} ${{ STARTED: 'started', DONE: 'completed', NOT_NEEDED: 'not needed' }[issueStatus]}`
     : stage.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase())
   await addEvent(client, id, 'TECH_UPDATE', `${head}${n ? ` — ${n}` : ''}`, actor, {
-    meta: { stage, customerVisible: visible, issue: issue ?? undefined, issueStatus: issueStatus ?? undefined, itemId: itemId ?? undefined, part: cleanedPart ?? undefined, checks: cleanedChecks ?? undefined },
+    meta: { stage, customerVisible: visible, issue: issue ?? undefined, issueStatus: issueStatus ?? undefined, itemId: itemId ?? undefined, part: cleanedPart ?? undefined, checks: cleanedChecks ?? undefined, photos: before.length || after.length ? { before, after } : undefined },
   })
   await patch(client, id, {})
   return visible
@@ -809,4 +839,89 @@ export async function undeclineRequest(actor, requestId) {
   if (actor.kind !== 'VENDOR' || !actor.vendorId) throw new RepairError('FORBIDDEN', 'Service centre access required', 403)
   await query('DELETE FROM repair_request_declines WHERE request_id = $1 AND vendor_id = $2', [requestId, actor.vendorId])
   return { declined: false }
+}
+
+
+// ── technician on the order ─────────────────────────────────────────────
+
+/** The shop names who is doing the repair (shown to the customer with a call button). */
+export const setTechnician = (actor, id, { name, phone } = {}) => tx(async (client) => {
+  if (actor.kind === 'CUSTOMER') throw new RepairError('FORBIDDEN', 'Only repair staff can do this', 403)
+  const r = await lock(client, id, actor)
+  if (['REJECTED', 'CANCELLED', 'COMPLETED'].includes(r.status)) throw new RepairError('INVALID_STATE', 'This repair is closed', 409)
+  const n = text(name, 100)
+  if (n.length < 2) throw new RepairError('VALIDATION', 'Enter the technician\'s name', 422)
+  const ph = text(phone, 20)
+  if (ph && !/^[+0-9][0-9 -]{6,18}$/.test(ph)) throw new RepairError('VALIDATION', 'Technician phone is invalid', 422)
+  await patch(client, id, { technician_name: n, technician_phone: ph || null })
+}).then(() => getManage(actor, id))
+
+// ── QC mismatch (bulk repairs): the shop flags a problem, the customer decides ──────────
+
+const MISMATCH_CHOICES = ['APPROVE', 'REPLACE']
+
+export const reportMismatch = (actor, id, { itemId, title, note, mediaIds } = {}) => tx(async (client) => {
+  if (actor.kind === 'CUSTOMER') throw new RepairError('FORBIDDEN', 'Only repair staff can do this', 403)
+  const r = await lock(client, id, actor)
+  if (!['INSPECTION', 'ESTIMATE_APPROVED', 'IN_REPAIR', 'QC_PENDING'].includes(r.status)) throw new RepairError('INVALID_STATE', 'A mismatch can be reported while the repair is under way', 409)
+  const t = text(title, 120)
+  if (t.length < 3) throw new RepairError('VALIDATION', 'Say what does not match', 422)
+  if (itemId != null) {
+    const { rows } = await client.query('SELECT 1 FROM repair_items WHERE id = $1 AND request_id = $2', [itemId, id])
+    if (!rows[0]) throw new RepairError('VALIDATION', 'That device is not on this request', 422)
+  }
+  if (Array.isArray(mediaIds) && mediaIds.length) {
+    const { claimRepairMedia } = await import('./repairs.media.js')
+    await claimRepairMedia(client, r, actor, mediaIds, 'REPAIR_PROGRESS', itemId ?? null)
+  }
+  await addEvent(client, id, 'QC_MISMATCH', `Mismatch found — ${t}`, actor, { meta: { title: t, note: text(note, 500) || undefined, itemId: itemId ?? undefined, photos: Array.isArray(mediaIds) && mediaIds.length ? { before: [], after: mediaIds } : undefined } })
+  await patch(client, id, {})
+}).then(() => { notifyRepair('UPDATE', id); return getManage(actor, id) })
+
+export const respondMismatch = (actor, id, { mismatchId, choice, note } = {}) => tx(async (client) => {
+  if (actor.kind !== 'CUSTOMER') throw new RepairError('FORBIDDEN', 'Only the customer can decide this', 403)
+  const r = await lock(client, id, actor)
+  if (!MISMATCH_CHOICES.includes(choice)) throw new RepairError('VALIDATION', 'Choose approve repair or replace device', 422)
+  const { rows } = await client.query(`SELECT id FROM repair_events WHERE id = $1 AND request_id = $2 AND kind = 'QC_MISMATCH'`, [Number(mismatchId) || 0, id])
+  if (!rows[0]) throw new RepairError('NOT_FOUND', 'Mismatch not found', 404)
+  const { rows: done } = await client.query(`SELECT 1 FROM repair_events WHERE request_id = $1 AND kind = 'QC_MISMATCH_RESPONSE' AND (meta->>'mismatchId')::bigint = $2`, [id, rows[0].id])
+  if (done[0]) throw new RepairError('INVALID_STATE', 'You have already answered this', 409)
+  await addEvent(client, id, 'QC_MISMATCH_RESPONSE', choice === 'APPROVE' ? 'Customer approved the repair' : 'Customer asked to replace the device', actor, { meta: { mismatchId: rows[0].id, choice, note: text(note, 300) || undefined } })
+  await patch(client, id, {})
+  return r
+}).then(() => getManage(actor, id))
+
+// ── chat between the customer and the chosen shop ───────────────────────
+
+const msgView = (m, role) => ({ id: Number(m.id), mine: m.sender_role === role, from: m.sender_role, body: m.body, at: m.created_at.toISOString() })
+
+async function chatParty(actor, requestId) {
+  const r = await getManage(actor, requestId)   // enforces who may see this request
+  if (!r.serviceCenterId) throw new RepairError('INVALID_STATE', 'Chat opens once a shop is chosen', 409)
+  return { role: actor.kind === 'CUSTOMER' ? 'CUSTOMER' : 'VENDOR', request: r }
+}
+
+export async function listMessages(actor, requestId) {
+  const { role } = await chatParty(actor, requestId)
+  const other = role === 'CUSTOMER' ? 'VENDOR' : 'CUSTOMER'
+  const { rows } = await query('SELECT * FROM repair_messages WHERE request_id = $1 ORDER BY id DESC LIMIT 200', [requestId])
+  await query(`UPDATE repair_messages SET read_at = NOW() WHERE request_id = $1 AND sender_role = $2 AND read_at IS NULL`, [requestId, other])
+  return { messages: rows.reverse().map((m) => msgView(m, role)) }
+}
+
+export async function sendMessage(actor, requestId, input = {}) {
+  const { role, request } = await chatParty(actor, requestId)
+  if (['REJECTED', 'CANCELLED'].includes(request.status)) throw new RepairError('INVALID_STATE', 'This repair is closed', 409)
+  const body = text(input.body, 1000)
+  if (!body) throw new RepairError('VALIDATION', 'Type a message', 422)
+  const { rows: c } = await query('SELECT COUNT(*)::int AS n FROM repair_messages WHERE request_id = $1', [requestId])
+  if (c[0].n >= 500) throw new RepairError('RATE_LIMITED', 'This chat is full', 429)
+  const { rows } = await query(`INSERT INTO repair_messages (request_id, sender_role, sender_id, body) VALUES ($1,$2,$3,$4) RETURNING *`, [requestId, role, actor.userId, body])
+  return msgView(rows[0], role)
+}
+
+/** Unread messages for this side (shown as a badge). */
+export async function unreadMessages(requestId, role) {
+  const { rows } = await query(`SELECT COUNT(*)::int AS n FROM repair_messages WHERE request_id = $1 AND sender_role = $2 AND read_at IS NULL`, [requestId, role === 'CUSTOMER' ? 'VENDOR' : 'CUSTOMER'])
+  return rows[0].n
 }
