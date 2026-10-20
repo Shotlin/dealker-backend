@@ -16,6 +16,7 @@ const SECTION_TYPES = [
   'deal_of_day',
   'recent_recommended',
   'steal_deals',
+  'collection_showcase',
 ]
 
 const merchBindingSchema = {

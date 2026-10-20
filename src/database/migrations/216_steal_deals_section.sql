@@ -1,4 +1,4 @@
--- Steal Deals home section: price tabs (Trending / ₹99 Store / …), category
+-- Steal Deals + Collection Showcase home sections: price tabs (Trending / ₹99 Store / …), category
 -- chips per tab and a product rail. Everything is configured from the
 -- dashboard theme builder (section config); products are resolved server-side.
 ALTER TABLE section_manifests
@@ -23,5 +23,6 @@ ALTER TABLE section_manifests
       'live_auction',
       'deal_of_day',
       'recent_recommended',
-      'steal_deals'
+      'steal_deals',
+      'collection_showcase'
     ));

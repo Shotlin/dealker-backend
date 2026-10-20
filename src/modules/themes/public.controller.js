@@ -434,7 +434,7 @@ export class PublicThemeController {
     // Without this step the mobile receives only IDs and renders nothing.
     const resolvedSections = await Promise.all(
       rows.map(async (section) => {
-        if (section.type === 'steal_deals') {
+        if (section.type === 'steal_deals' || section.type === 'collection_showcase') {
           return {
             ...section,
             config: await resolveStealDealsConfig(section.config, allocatedShopIds, priceMode),
@@ -834,7 +834,12 @@ async function resolveStealDealsConfig(config, allocatedShopIds, priceMode) {
 
   const tabs = await Promise.all(
     rawTabs.map(async (tab) => {
-      const chips = (Array.isArray(tab.chips) ? tab.chips : [])
+      // Collection Showcase tabs list plain `category_ids`; Steal Deals tabs use
+      // labelled `chips`. Both feed the same per-category product fill.
+      const plainIds = (Array.isArray(tab.category_ids) ? tab.category_ids : [])
+        .filter(isUuid)
+        .map((category_id) => ({ category_id }))
+      const chips = [...(Array.isArray(tab.chips) ? tab.chips : []), ...plainIds]
         .filter((c) => c && isUuid(c.category_id))
         .slice(0, STEAL_DEALS_MAX_CHIPS)
       const pinnedIds = (Array.isArray(tab.product_ids) ? tab.product_ids : []).filter(isUuid)
