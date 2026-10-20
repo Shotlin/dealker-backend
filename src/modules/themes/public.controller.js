@@ -434,7 +434,7 @@ export class PublicThemeController {
     // Without this step the mobile receives only IDs and renders nothing.
     const resolvedSections = await Promise.all(
       rows.map(async (section) => {
-        if (section.type === 'steal_deals' || section.type === 'collection_showcase') {
+        if (STEAL_TABBED_TYPES.has(section.type)) {
           return {
             ...section,
             config: await resolveStealDealsConfig(section.config, allocatedShopIds, priceMode),
@@ -750,6 +750,8 @@ async function getImplicitSectionProducts(section, limit, allocatedShopIds, pric
     case 'deal_of_day':
       return getDealProducts(Math.min(sectionLimit, 5), allocatedShopIds, priceMode)
     case 'recent_recommended':
+    case 'brand_spotlight':
+    case 'banner_rail':
       return getTrendingProducts(sectionLimit, allocatedShopIds, priceMode)
     case 'category_product_grid':
     case 'product_carousel':
@@ -807,7 +809,8 @@ async function resolveCategorySections(rails, fallbackResolver, railCap, allocat
   return sections.length > 0 ? sections : fallbackResolver()
 }
 
-const STEAL_DEALS_MAX_TABS = 6
+const STEAL_TABBED_TYPES = new Set(['steal_deals', 'collection_showcase', 'price_shop'])
+const STEAL_DEALS_MAX_TABS = 8
 const STEAL_DEALS_MAX_CHIPS = 8
 const STEAL_DEALS_TAB_CAP = 40
 
@@ -869,8 +872,12 @@ async function resolveStealDealsConfig(config, allocatedShopIds, priceMode) {
       // A tab with nothing bound (e.g. "Trending") falls back to the live
       // trending feed so it is never empty.
       if (byId.size === 0 && chips.length === 0 && pinnedIds.length === 0) {
-        const trending = await getTrendingProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode)
-        trending.forEach((p) => tag(p, p.category_id))
+        const pool = mergeUniqueProducts([
+          await getTrendingProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
+          await getDealProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
+          await getFeaturedProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
+        ])
+        pool.forEach((p) => tag(p, p.category_id))
       }
 
       let products = [...byId.values()]
