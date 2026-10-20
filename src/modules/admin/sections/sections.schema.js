@@ -15,6 +15,7 @@ const SECTION_TYPES = [
   'live_auction',
   'deal_of_day',
   'recent_recommended',
+  'steal_deals',
 ]
 
 const merchBindingSchema = {

@@ -434,6 +434,12 @@ export class PublicThemeController {
     // Without this step the mobile receives only IDs and renders nothing.
     const resolvedSections = await Promise.all(
       rows.map(async (section) => {
+        if (section.type === 'steal_deals') {
+          return {
+            ...section,
+            config: await resolveStealDealsConfig(section.config, allocatedShopIds, priceMode),
+          }
+        }
         const binding = section.merch_binding || {}
         const productIds = Array.isArray(binding.product_ids) ? binding.product_ids : []
         const categoryIds = Array.isArray(binding.category_ids) ? binding.category_ids : []
@@ -799,6 +805,75 @@ async function resolveCategorySections(rails, fallbackResolver, railCap, allocat
   }
 
   return sections.length > 0 ? sections : fallbackResolver()
+}
+
+const STEAL_DEALS_MAX_TABS = 6
+const STEAL_DEALS_MAX_CHIPS = 8
+const STEAL_DEALS_TAB_CAP = 40
+
+const isUuid = (v) =>
+  typeof v === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
+
+const effectivePrice = (p) => {
+  const sale = Number(p.sale_price)
+  const price = Number(p.price)
+  return Number.isFinite(sale) && sale > 0 ? sale : price
+}
+
+/**
+ * Steal Deals: every tab carries its own product list. A tab's products are
+ * its pinned `product_ids` plus the products of each category chip, filtered
+ * by the tab's optional `max_price` (the "₹99 Store" rule). Each product gets
+ * `deal_category_ids` so the app can filter by chip, including cross-listed
+ * products whose primary category is different.
+ */
+async function resolveStealDealsConfig(config, allocatedShopIds, priceMode) {
+  const cfg = config && typeof config === 'object' ? config : {}
+  const rawTabs = Array.isArray(cfg.tabs) ? cfg.tabs.slice(0, STEAL_DEALS_MAX_TABS) : []
+
+  const tabs = await Promise.all(
+    rawTabs.map(async (tab) => {
+      const chips = (Array.isArray(tab.chips) ? tab.chips : [])
+        .filter((c) => c && isUuid(c.category_id))
+        .slice(0, STEAL_DEALS_MAX_CHIPS)
+      const pinnedIds = (Array.isArray(tab.product_ids) ? tab.product_ids : []).filter(isUuid)
+      const maxPrice = Number(tab.max_price)
+      const hasCap = Number.isFinite(maxPrice) && maxPrice > 0
+
+      const [pinned, perChip] = await Promise.all([
+        pinnedIds.length ? getProductsByIds(pinnedIds, allocatedShopIds, priceMode) : [],
+        Promise.all(
+          chips.map((c) =>
+            getProductsByCategoryIds([c.category_id], STEAL_DEALS_TAB_CAP, [], allocatedShopIds, priceMode)
+          )
+        ),
+      ])
+
+      const byId = new Map()
+      const tag = (p, categoryId) => {
+        const hit = byId.get(p.id) || { ...p, deal_category_ids: [] }
+        if (categoryId && !hit.deal_category_ids.includes(categoryId)) {
+          hit.deal_category_ids.push(categoryId)
+        }
+        byId.set(p.id, hit)
+      }
+      pinned.forEach((p) => tag(p, p.category_id))
+      perChip.forEach((list, i) => list.forEach((p) => tag(p, chips[i].category_id)))
+
+      // A tab with nothing bound (e.g. "Trending") falls back to the live
+      // trending feed so it is never empty.
+      if (byId.size === 0 && chips.length === 0 && pinnedIds.length === 0) {
+        const trending = await getTrendingProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode)
+        trending.forEach((p) => tag(p, p.category_id))
+      }
+
+      let products = [...byId.values()]
+      if (hasCap) products = products.filter((p) => effectivePrice(p) <= maxPrice)
+      return { ...tab, products: products.slice(0, STEAL_DEALS_TAB_CAP) }
+    })
+  )
+  return { ...cfg, tabs }
 }
 
 async function getProductsByIds(productIds, allocatedShopIds = null, priceMode = 'retail') {
