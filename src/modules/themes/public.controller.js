@@ -810,7 +810,7 @@ async function resolveCategorySections(rails, fallbackResolver, railCap, allocat
   return sections.length > 0 ? sections : fallbackResolver()
 }
 
-const STEAL_TABBED_TYPES = new Set(['steal_deals', 'collection_showcase', 'price_shop', 'price_sale'])
+const STEAL_TABBED_TYPES = new Set(['steal_deals', 'collection_showcase', 'price_shop', 'price_sale', 'category_deals'])
 const STEAL_DEALS_MAX_TABS = 8
 const STEAL_DEALS_MAX_CHIPS = 8
 const STEAL_DEALS_TAB_CAP = 40

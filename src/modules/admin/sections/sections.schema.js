@@ -24,6 +24,7 @@ const SECTION_TYPES = [
   'top_brands',
   'price_sale',
   'oval_spotlight',
+  'category_deals',
 ]
 
 const merchBindingSchema = {
