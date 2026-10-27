@@ -6,8 +6,10 @@
 
 import { MarketplaceCatalogService } from './marketplace-catalog.service.js'
 import { injectSponsored } from '../ads/ads-serving.service.js'
+import { ShopDirectoryService } from './shop-directory.service.js'
 
 const service = new MarketplaceCatalogService()
+const shopDirectory = new ShopDirectoryService()
 
 /** Public routes — mounted at /api/v1/discovery */
 export const publicDiscoveryRoutes = async function discoveryRoutes(fastify) {
@@ -44,6 +46,58 @@ export const publicDiscoveryRoutes = async function discoveryRoutes(fastify) {
         userId: request.user?.id || null, page: Math.max(1, Number(page) || 1),
       })
     },
+  })
+
+  // Vendor shops (Home "Shops (Nearby N)" + All shops). Anonymous allowed; a token adds is_following.
+  fastify.get('/shops', {
+    preHandler: async (request) => {
+      try { await request.jwtVerify() } catch { /* anonymous */ }
+    },
+    handler: async (request) => {
+      const { lat, lng, limit = 12 } = request.query || {}
+      return shopDirectory.list({ lat, lng, limit, userId: request.user?.id || null })
+    },
+  })
+
+  const optionalAuth = async (request) => {
+    try { await request.jwtVerify() } catch { /* anonymous */ }
+  }
+
+  fastify.get('/shops/:id', {
+    preHandler: optionalAuth,
+    handler: async (request, reply) => {
+      const result = await shopDirectory.profile(request.params.id, request.user?.id || null)
+      if (!result) return reply.code(404).send({ success: false, message: 'Shop not found' })
+      return result
+    },
+  })
+
+  fastify.get('/shops/:id/products', {
+    handler: async (request) => {
+      const { categoryId, deals, sort, page, limit } = request.query || {}
+      return shopDirectory.products(request.params.id, {
+        categoryId: categoryId || null,
+        deals: deals === '1' || deals === 'true',
+        sort, page, limit,
+      })
+    },
+  })
+
+  fastify.post('/shops/:id/follow', {
+    preHandler: [fastify.authenticate],
+    handler: async (request, reply) => {
+      const state = await shopDirectory.follow(request.user.id, request.params.id)
+      if (!state) return reply.code(404).send({ success: false, message: 'Shop not found' })
+      return { success: true, data: state }
+    },
+  })
+
+  fastify.delete('/shops/:id/follow', {
+    preHandler: [fastify.authenticate],
+    handler: async (request) => ({
+      success: true,
+      data: await shopDirectory.unfollow(request.user.id, request.params.id),
+    }),
   })
 
   fastify.get('/home', {

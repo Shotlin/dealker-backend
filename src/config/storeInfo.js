@@ -8,12 +8,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
  */
 export const STORE_INFO = {
   name: 'Dealker',
-  // ⚠ Still the leftover "Bakaloo"/Surat business-registration details from
-  // before the FreshCuts rebrand — genuinely wrong on every real invoice/
-  // packing slip printed today, but these are legal/compliance fields
-  // (GST registration, registered address) that must come from the user's
-  // real business records, never guessed. Replace with FreshCuts' actual
-  // registered address, GST number, and support phone.
+  // ⚠ The address, GST number and phone below are still the old "Bakaloo"
+  // (Surat) registration details — wrong on every real invoice/packing slip.
+  // They are legal/compliance fields and must come from Dealker's real
+  // business records, never guessed. Replace with Dealker's registered
+  // address, GST number and support phone.
   addressLines: [
     'Shop No. 27, Khari Faliyu, Ananddhara V-2 Road,',
     'Opp. Rudraksh Residency, Ramchowk, Mota Varachha,',
@@ -21,7 +20,7 @@ export const STORE_INFO = {
   ],
   gstNo: '24ABFFB1171P1ZD',
   phone: '+91 99249 90627',
-  logoPath: path.join(__dirname, '..', 'assets', 'freshcuts-logo.png'),
+  logoPath: path.join(__dirname, '..', 'assets', 'dealker-logo.png'),
   // PDFKit's standard 14 fonts (Helvetica etc.) have no ₹ glyph — they mangle
   // it into a stray "1"-like symbol. This variable font (already used by the
   // dashboard, OFL-licensed) does, so it's the font for any text with a ₹.

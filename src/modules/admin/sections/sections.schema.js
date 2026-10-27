@@ -25,6 +25,7 @@ const SECTION_TYPES = [
   'price_sale',
   'oval_spotlight',
   'category_deals',
+  'shops_nearby',
 ]
 
 const merchBindingSchema = {

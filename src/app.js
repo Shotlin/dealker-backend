@@ -298,6 +298,13 @@ export const buildApp = async () => {
     prefix: "/api/v1/theme",
   });
 
+  // Product page layout + condition/QC (public) and layout editor (admin)
+  {
+    const pp = await import("./modules/product-page/product-page.routes.js");
+    await app.register(pp.publicProductPageRoutes, { prefix: "/api/v1/product-page" });
+    await app.register(pp.adminProductPageRoutes, { prefix: "/api/v1/admin/product-page" });
+  }
+
   // Wishlist
   await app.register(import("./modules/wishlist/wishlist.routes.js"), {
     prefix: "/api/v1/wishlist",
