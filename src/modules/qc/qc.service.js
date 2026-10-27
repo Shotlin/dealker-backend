@@ -19,6 +19,20 @@ const QUEUE_FROM = `
   LEFT JOIN categories c ON c.id = p.category_id
  WHERE sp.deleted_at IS NULL AND p.deleted_at IS NULL`
 
+/** Inspector's per-check results (shown to customers on the QC report): PASS or WARN with a short detail. */
+function cleanChecks(checks) {
+  if (!Array.isArray(checks)) return null
+  const out = checks
+    .map((c) => ({
+      label: String(c?.label || '').trim().slice(0, 80),
+      status: c?.status === 'WARN' ? 'WARN' : 'PASS',
+      detail: String(c?.detail || '').trim().slice(0, 120),
+    }))
+    .filter((c) => c.label)
+    .slice(0, 30)
+  return out.length ? out : null
+}
+
 export class QcService {
   async getSettings() {
     const { rows } = await query(`SELECT * FROM qc_settings WHERE id = 1`)
@@ -161,7 +175,7 @@ export class QcService {
   }
 
   /** Admin's manual decision. FAILED / RECHECK need a note the seller can act on. */
-  async setManual(listingId, status, notes, actorId) {
+  async setManual(listingId, status, notes, actorId, { score = null, checks = null } = {}) {
     if (!QC_STATUSES.includes(status)) throw httpError(400, `status must be one of ${QC_STATUSES.join(', ')}`, 'VALIDATION')
     const text = String(notes || '').trim()
     if (['QC_FAILED', 'QC_RECHECK'].includes(status) && text.length < 5) {
@@ -173,6 +187,8 @@ export class QcService {
       const { current } = await this.#context(listingId, client.query.bind(client))
       await this.#record(client, listingId, {
         toStatus: status, fromStatus: current.status, mode: 'MANUAL', notes: text, actorId,
+        score: Number.isInteger(score) && score >= 0 && score <= 100 ? score : null,
+        results: cleanChecks(checks),
       })
       await client.query('COMMIT')
     } catch (e) {

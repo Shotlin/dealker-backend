@@ -64,10 +64,10 @@ export async function getCondition(productId) {
   const { rows } = await query(
     `SELECT p.condition, p.condition_notes, p.usage_duration, p.battery_health, p.warranty_info,
             p.accessories_included, p.has_invoice, p.imei, p.specifications,
-            sp.vendor_qc, sp.qc_status
+            sp.vendor_qc, sp.qc_status, sp.shop_id
        FROM products p
        LEFT JOIN LATERAL (
-         SELECT vendor_qc, qc_status FROM shop_products
+         SELECT vendor_qc, qc_status, shop_id FROM shop_products
           WHERE product_id = p.id AND deleted_at IS NULL AND approval_status = 'APPROVED'
           ORDER BY created_at DESC LIMIT 1) sp ON TRUE
       WHERE p.id = $1`, [productId]
@@ -85,6 +85,7 @@ export async function getCondition(productId) {
     : []
   const qc = isUsed ? await new QcService().publicReport(productId) : null
   return {
+    shopId: r.shop_id || null,
     condition,
     label: LABELS[condition] || condition,
     isUsed,

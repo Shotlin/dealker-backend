@@ -37,10 +37,10 @@ export const adminQcRoutes = async function qcAdminRoutes(fastify) {
 
   fastify.post('/listings/:id/status', {
     preHandler: manage,
-    schema: { body: { type: 'object', required: ['status'], properties: { status: { type: 'string' }, notes: { type: 'string', maxLength: 1000 } } } },
+    schema: { body: { type: 'object', required: ['status'], properties: { status: { type: 'string' }, notes: { type: 'string', maxLength: 1000 }, score: { type: 'integer', minimum: 0, maximum: 100 }, checks: { type: 'array', maxItems: 30, items: { type: 'object' } } } } },
     handler: async (request, reply) => {
       try {
-        return { success: true, data: await qcService.setManual(request.params.id, request.body.status, request.body.notes, request.user?.id) }
+        return { success: true, data: await qcService.setManual(request.params.id, request.body.status, request.body.notes, request.user?.id, { score: request.body.score, checks: request.body.checks }) }
       } catch (e) { return send(reply, e) }
     },
   })

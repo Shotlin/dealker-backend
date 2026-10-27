@@ -850,9 +850,26 @@ export class OrdersService {
           const { VendorSettlementsService } = await import('../vendor-settlements/vendor-settlements.service.js')
           const settlements = this.settlementsService || new VendorSettlementsService()
           const { query } = await import('../../config/database.js')
-          const { rows: sellerOrders } = await query('SELECT id FROM seller_orders WHERE order_id = $1', [orderId])
+          const { rows: sellerOrders } = await query('SELECT id, vendor_id FROM seller_orders WHERE order_id = $1 ORDER BY created_at', [orderId])
           for (const so of sellerOrders) {
-            await settlements.postSellerOrderEntries(so.id)
+            // Platform-store slices have no vendor to settle with; one failing slice must not skip the others.
+            if (!so.vendor_id) continue
+            try {
+              await settlements.postSellerOrderEntries(so.id)
+            } catch (err) {
+              logger.warn({ err: err.message, sellerOrderId: so.id }, 'vendor settlement posting failed (non-critical)')
+            }
+          }
+          // Bill the customer for each vendor's slice. Billing never blocks a delivery: if it cannot be issued
+          // (seller profile incomplete, tax mismatch…) the order stays delivered and staff can issue it later
+          // from the dashboard — issuing is idempotent per seller order.
+          const { issueForSellerOrder } = await import('../sales-invoices/sales-invoices.service.js')
+          for (const so of sellerOrders) {
+            try {
+              await issueForSellerOrder(so.id, { kind: 'SYSTEM', userId: actorId || null })
+            } catch (err) {
+              logger.warn({ err: err.message, code: err.code, sellerOrderId: so.id }, 'automatic seller-order invoice could not be issued')
+            }
           }
         }
       }

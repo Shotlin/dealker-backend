@@ -4,6 +4,7 @@
  */
 import { query } from '../../config/database.js'
 import { withCardFields } from '../../utils/product-card-fields.js'
+import { distancesFor } from '../distance/distance.service.js'
 
 const LISTED = `sp.shop_id = $1 AND sp.is_available = true AND sp.deleted_at IS NULL
   AND sp.approval_status = 'APPROVED' AND sp.listing_status = 'ACTIVE' AND p.is_active = true`
@@ -15,7 +16,7 @@ export class ShopDirectoryService {
    * Active vendor shops that currently sell something, nearest first when the
    * caller sends coordinates (distance_km), best rated first otherwise.
    */
-  async list({ lat = null, lng = null, limit = 12, userId = null } = {}) {
+  async list({ lat = null, lng = null, limit = 12, userId = null, addressId = null } = {}) {
     const la = num(lat)
     const ln = num(lng)
     const hasGeo = la != null && ln != null
@@ -51,15 +52,23 @@ export class ShopDirectoryService {
        LIMIT $4`,
       params
     )
+    let data = rows
+    if (hasGeo && rows.length) {
+      // Straight-line only preselects/orders; the shown km is the saved road distance (one map call per new pair).
+      const d = await distancesFor({ lat: la, lng: ln }, rows.map((r) => r.id), { userId, addressId })
+      data = rows
+        .map((r) => (d[r.id] ? { ...r, distance_km: d[r.id].km, distance_minutes: d[r.id].minutes, distance_method: d[r.id].method } : r))
+        .sort((a, b) => (a.distance_km ?? 1e9) - (b.distance_km ?? 1e9) || b.rating - a.rating)
+    }
     return {
       success: true,
-      data: rows,
-      meta: { total: rows.length, has_location: hasGeo },
+      data,
+      meta: { total: data.length, has_location: hasGeo },
     }
   }
 
   /** One shop's public profile (header, stats, address, category chips). */
-  async profile(shopId, userId = null) {
+  async profile(shopId, userId = null, { lat = null, lng = null, addressId = null } = {}) {
     const { rows } = await query(
       `SELECT s.id, s.name, s.slug, s.description, s.logo_url, s.banner_url, s.is_verified,
               s.address_line1, s.address_line2, s.city, s.state, s.pincode,
@@ -101,10 +110,15 @@ export class ShopDirectoryService {
     const total = counts[0]?.product_count ?? 0
     // A category holding every listing adds nothing next to "All" — hide it unless it is the only one.
     const categories = cats.length > 1 ? cats.filter((c) => c.count < total) : cats
+    const la = num(lat)
+    const ln = num(lng)
+    const dist = la != null && ln != null ? (await distancesFor({ lat: la, lng: ln }, [shopId], { userId, addressId }))[shopId] : null
     return {
       success: true,
       data: {
         ...shop,
+        distance_km: dist?.km ?? null,
+        distance_minutes: dist?.minutes ?? null,
         product_count: total,
         deal_count: counts[0]?.deal_count ?? 0,
         categories,

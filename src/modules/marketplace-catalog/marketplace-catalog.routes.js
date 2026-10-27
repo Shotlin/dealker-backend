@@ -7,6 +7,7 @@
 import { MarketplaceCatalogService } from './marketplace-catalog.service.js'
 import { injectSponsored } from '../ads/ads-serving.service.js'
 import { ShopDirectoryService } from './shop-directory.service.js'
+import { distancesFor } from '../distance/distance.service.js'
 
 const service = new MarketplaceCatalogService()
 const shopDirectory = new ShopDirectoryService()
@@ -54,8 +55,8 @@ export const publicDiscoveryRoutes = async function discoveryRoutes(fastify) {
       try { await request.jwtVerify() } catch { /* anonymous */ }
     },
     handler: async (request) => {
-      const { lat, lng, limit = 12 } = request.query || {}
-      return shopDirectory.list({ lat, lng, limit, userId: request.user?.id || null })
+      const { lat, lng, limit = 12, addressId } = request.query || {}
+      return shopDirectory.list({ lat, lng, limit, userId: request.user?.id || null, addressId: addressId || null })
     },
   })
 
@@ -66,9 +67,21 @@ export const publicDiscoveryRoutes = async function discoveryRoutes(fastify) {
   fastify.get('/shops/:id', {
     preHandler: optionalAuth,
     handler: async (request, reply) => {
-      const result = await shopDirectory.profile(request.params.id, request.user?.id || null)
+      const { lat, lng, addressId } = request.query || {}
+      const result = await shopDirectory.profile(request.params.id, request.user?.id || null, { lat, lng, addressId: addressId || null })
       if (!result) return reply.code(404).send({ success: false, message: 'Shop not found' })
       return result
+    },
+  })
+
+  // Saved road distance from the caller's pin to many shops (product boxes batch their shop ids here).
+  fastify.get('/distances', {
+    preHandler: optionalAuth,
+    handler: async (request) => {
+      const { lat, lng, shopIds = '', addressId } = request.query || {}
+      const ids = String(shopIds).split(',').map((x) => x.trim()).filter((x) => /^[0-9a-f-]{36}$/i.test(x))
+      const data = await distancesFor({ lat: Number(lat), lng: Number(lng) }, ids, { userId: request.user?.id || null, addressId: addressId || null })
+      return { success: true, data }
     },
   })
 

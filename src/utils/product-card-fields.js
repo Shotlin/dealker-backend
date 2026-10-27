@@ -20,13 +20,21 @@ async function getPlatformShopName() {
  *   brand       — the product's brand (search filters group by it)
  * One extra query per call, keyed by product id; rows without a match are returned unchanged.
  */
+const CONDITION_BADGE = {
+  OPEN_BOX: 'Open box',
+  REFURBISHED: 'Refurbished',
+  USED_LIKE_NEW: 'Used · Like new',
+  USED_GOOD: 'Used · Good',
+  USED_FAIR: 'Used · Fair',
+}
+
 export async function withCardFields(products) {
   if (!Array.isArray(products) || products.length === 0) return products
   const ids = [...new Set(products.map((p) => p?.id).filter(Boolean))]
   if (ids.length === 0) return products
   const [{ rows }, storeName] = await Promise.all([
     query(
-      `SELECT p.id, p.created_at, p.attributes, p.brand,
+      `SELECT p.id, p.created_at, p.attributes, p.brand, p.condition,
               COALESCE(NULLIF(p.vendor_name, ''), v.name) AS seller
          FROM products p LEFT JOIN vendors v ON v.id = p.owner_vendor_id
         WHERE p.id = ANY($1::uuid[])`,
@@ -44,6 +52,11 @@ export async function withCardFields(products) {
       created_at: extra.created_at,
       attributes: extra.attributes ?? p.attributes ?? null,
       brand: p.brand ?? extra.brand ?? null,
+      condition: extra.condition || null,
+      // A used / open-box / refurbished item wears its condition on the card instead of "NEW".
+      custom_badges: Array.isArray(p.custom_badges) && p.custom_badges.length
+        ? p.custom_badges
+        : CONDITION_BADGE[extra.condition] ? [CONDITION_BADGE[extra.condition]] : p.custom_badges,
     }
   })
 }
