@@ -7,6 +7,7 @@ import { BULK_FROM, demandTags, matchInventory, modelKey, parseStorage } from '.
 const err = (statusCode, message, code = 'B2B_ERROR', extra = {}) => Object.assign(new Error(message), { statusCode, code, ...extra })
 const round2 = (n) => Math.round(Number(n) * 100) / 100
 const SELLER_ELIGIBLE = ['ACTIVE', 'VERIFIED']
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const COND = ['NEW', 'OPEN_BOX', 'REFURBISHED', 'USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR']
 const DISPLAY_PREFS = ['ANY', 'ORIGINAL', 'GRADE_AB']
 const FULFILMENT_PREFS = ['ANY', 'PICKUP', 'DELIVERY']
@@ -267,17 +268,22 @@ export const b2b = {
 
   // ── Wholesale shelf: other vendors' B2B listings, bought directly ────────
   /** Browse verified vendors' wholesale listings (never the caller's own). */
-  async wholesaleList(vendorId, { search, brand, condition, sort = 'newest', page = 1, limit = 20 } = {}) {
+  async wholesaleList(vendorId, { search, brand, condition, category, deals, sort = 'newest', page = 1, limit = 20 } = {}) {
     const params = [vendorId, SELLER_ELIGIBLE]
     const where = [`sp.sell_b2b = TRUE`, `sp.wholesale_price > 0`, `sp.deleted_at IS NULL`, `p.deleted_at IS NULL`, `sp.approval_status = 'APPROVED'`,
       `sp.listing_status = 'ACTIVE'`, `sp.stock_quantity >= GREATEST(sp.min_order_qty, 1)`, `p.owner_vendor_id IS NOT NULL`, `p.owner_vendor_id <> $1`, `v.status = ANY($2)`, `v.is_active = TRUE`]
     const p_ = (x) => { params.push(x); return `$${params.length}` }
     if (search) { const s = p_(`%${String(search).slice(0, 80)}%`); where.push(`(p.name ILIKE ${s} OR p.brand ILIKE ${s})`) }
+    // A category filter takes in its sub-categories; "deals" keeps only listings with a B2B discount.
+    if (category && UUID_RE.test(String(category))) {
+      where.push(`p.category_id IN (WITH RECURSIVE t AS (SELECT id FROM categories WHERE id = ${p_(String(category))} UNION ALL SELECT c.id FROM categories c JOIN t ON c.parent_id = t.id) SELECT id FROM t)`)
+    }
+    if (deals === true || deals === 'true' || deals === '1' || deals === 1) where.push(`sp.b2b_discount_pct > 0`)
     // Facets (brands / conditions on offer) are counted before the brand + condition filters, so the pickers keep every option.
     const facetWhere = where.join(' AND '); const facetParams = [...params]
     if (brand) where.push(`lower(p.brand) = lower(${p_(String(brand).slice(0, 60))})`)
     if (condition && COND.includes(condition)) where.push(`p.condition = ${p_(condition)}`)
-    const order = { price_low: 'sp.wholesale_price ASC', price_high: 'sp.wholesale_price DESC', stock: 'sp.stock_quantity DESC' }[sort] || 'sp.created_at DESC'
+    const order = { price_low: 'sp.wholesale_price ASC', price_high: 'sp.wholesale_price DESC', stock: 'sp.stock_quantity DESC', discount: 'sp.b2b_discount_pct DESC NULLS LAST, sp.created_at DESC' }[sort] || 'sp.created_at DESC'
     const lim = Math.min(50, Math.max(1, Number(limit) || 20)); const off = (Math.max(1, Number(page) || 1) - 1) * lim
     const base = `FROM shop_products sp JOIN products p ON p.id = sp.product_id JOIN vendors v ON v.id = p.owner_vendor_id
                   LEFT JOIN vendor_profiles vp ON vp.vendor_id = v.id WHERE ${where.join(' AND ')}`
@@ -302,6 +308,32 @@ export const b2b = {
       })),
       pagination: { page: Number(page) || 1, limit: lim, total: cnt[0].n },
     }
+  },
+
+  /**
+   * Category tree for the wholesale shelf: only categories (and their parents) that hold at least one listing this
+   * vendor could buy, each with the number of such listings (sub-categories rolled up into their parent).
+   */
+  async wholesaleCategories(vendorId) {
+    const [{ rows: counts }, { rows: cats }] = await Promise.all([
+      query(`SELECT p.category_id AS id, COUNT(*)::int AS n
+               FROM shop_products sp JOIN products p ON p.id = sp.product_id JOIN vendors v ON v.id = p.owner_vendor_id
+              WHERE sp.sell_b2b = TRUE AND sp.wholesale_price > 0 AND sp.deleted_at IS NULL AND p.deleted_at IS NULL AND sp.approval_status = 'APPROVED'
+                AND sp.listing_status = 'ACTIVE' AND sp.stock_quantity >= GREATEST(sp.min_order_qty, 1) AND p.owner_vendor_id IS NOT NULL
+                AND p.owner_vendor_id <> $1 AND v.status = ANY($2) AND v.is_active = TRUE AND p.category_id IS NOT NULL
+              GROUP BY p.category_id`, [vendorId, SELLER_ELIGIBLE]),
+      query(`SELECT id, name, slug, image_url, parent_id FROM categories WHERE is_active = TRUE ORDER BY sort_order, name`),
+    ])
+    const own = new Map(counts.map((r) => [r.id, r.n]))
+    const byId = new Map(cats.map((c) => [c.id, { id: c.id, name: c.name, slug: c.slug, image_url: c.image_url, count: own.get(c.id) || 0, children: [], parent_id: c.parent_id }]))
+    const roots = []
+    for (const c of byId.values()) {
+      const parent = c.parent_id && byId.get(c.parent_id)
+      if (parent) parent.children.push(c); else roots.push(c)
+    }
+    const roll = (n) => { n.count += n.children.reduce((sum, ch) => sum + roll(ch), 0); n.children = n.children.filter((ch) => ch.count > 0); delete n.parent_id; return n.count }
+    roots.forEach(roll)
+    return { data: roots.filter((r) => r.count > 0) }
   },
 
   async wholesaleDetail(vendorId, listingId) {

@@ -42,6 +42,7 @@ export async function vendorB2bRoutes(fastify) {
   fastify.get('/requirements', { preHandler: pre }, wrap(async (req) => ({ success: true, ...(await b2b.listForVendor(req.vendorId, req.query || {})) })))
   // Wholesale shelf: other vendors' B2B listings (browse → buy at the listed price)
   fastify.get('/wholesale', { preHandler: pre }, wrap(async (req) => ({ success: true, ...(await b2b.wholesaleList(req.vendorId, req.query || {})) })))
+  fastify.get('/wholesale/categories', { preHandler: pre }, wrap(async (req) => ({ success: true, ...(await b2b.wholesaleCategories(req.vendorId)) })))
   fastify.get('/wholesale/:id', { preHandler: pre, schema: { params: { type: 'object', properties: { id: uuid }, required: ['id'] } } },
     wrap(async (req) => ({ success: true, data: await b2b.wholesaleDetail(req.vendorId, req.params.id) })))
   fastify.post('/wholesale/:id/order', {
