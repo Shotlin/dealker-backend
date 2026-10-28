@@ -1,0 +1,688 @@
+[
+ {
+  "key": "samsung-galaxy-m35-5g",
+  "vendor": 0,
+  "cat": "Samsung Galaxy",
+  "name": "Samsung Galaxy M35 5G (8GB/128GB, Moonlight Blue)",
+  "brand": "Samsung",
+  "q": "SAMSUNG Galaxy M35 5G (Moonlight Blue, 128 GB) (8 GB RAM)",
+  "must": [
+   "samsung",
+   "m35"
+  ],
+  "retail": 19999,
+  "wholesale": 17400,
+  "moq": 10,
+  "stock": 140,
+  "discount": 13,
+  "specs": {
+   "RAM": "8 GB",
+   "Storage": "128 GB",
+   "Display": "6.6 inch Super AMOLED 120Hz",
+   "Battery": "6000 mAh",
+   "Network": "5G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "samsung-galaxy-s24-fe-5g",
+  "vendor": 0,
+  "cat": "Samsung Galaxy",
+  "name": "Samsung Galaxy S24 FE 5G (8GB/128GB, Blue)",
+  "brand": "Samsung",
+  "q": "SAMSUNG Galaxy S24 FE 5G (Blue, 128 GB) (8 GB RAM)",
+  "must": [
+   "samsung",
+   "s24",
+   "fe"
+  ],
+  "retail": 54999,
+  "wholesale": 48900,
+  "moq": 5,
+  "stock": 60,
+  "discount": 11,
+  "specs": {
+   "RAM": "8 GB",
+   "Storage": "128 GB",
+   "Display": "6.7 inch Dynamic AMOLED 120Hz",
+   "Battery": "4700 mAh",
+   "Network": "5G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "samsung-galaxy-a15-5g",
+  "vendor": 0,
+  "cat": "Samsung Galaxy",
+  "name": "Samsung Galaxy A15 5G (6GB/128GB, Blue Black)",
+  "brand": "Samsung",
+  "q": "SAMSUNG Galaxy A15 5G (Blue Black, 128 GB) (6 GB RAM)",
+  "must": [
+   "samsung",
+   "a15"
+  ],
+  "retail": 15999,
+  "wholesale": 13900,
+  "moq": 15,
+  "stock": 180,
+  "discount": null,
+  "specs": {
+   "RAM": "6 GB",
+   "Storage": "128 GB",
+   "Display": "6.5 inch Super AMOLED 90Hz",
+   "Battery": "5000 mAh",
+   "Network": "5G"
+  },
+  "imgs": 3
+ },
+ {
+  "key": "oneplus-12r-5g",
+  "vendor": 0,
+  "cat": "OnePlus",
+  "name": "OnePlus 12R 5G (16GB/256GB, Iron Gray)",
+  "brand": "OnePlus",
+  "q": "OnePlus 12R (Iron Gray, 128 GB) (8 GB RAM)",
+  "must": [
+   "oneplus",
+   "12r"
+  ],
+  "retail": 45999,
+  "wholesale": 41000,
+  "moq": 5,
+  "stock": 75,
+  "discount": 11,
+  "specs": {
+   "RAM": "16 GB",
+   "Storage": "256 GB",
+   "Display": "6.78 inch LTPO AMOLED 120Hz",
+   "Battery": "5500 mAh",
+   "Network": "5G"
+  },
+  "imgs": 3
+ },
+ {
+  "key": "oneplus-nord-4-5g",
+  "vendor": 0,
+  "cat": "OnePlus",
+  "name": "OnePlus Nord 4 5G (8GB/128GB, Mercurial Silver)",
+  "brand": "OnePlus",
+  "q": "OnePlus Nord 4 5G (Mercurial Silver, 128 GB) (8 GB RAM)",
+  "must": [
+   "oneplus",
+   "nord",
+   "4"
+  ],
+  "retail": 29999,
+  "wholesale": 26400,
+  "moq": 10,
+  "stock": 90,
+  "discount": 12,
+  "specs": {
+   "RAM": "8 GB",
+   "Storage": "128 GB",
+   "Display": "6.74 inch AMOLED 120Hz",
+   "Battery": "5500 mAh",
+   "Network": "5G"
+  },
+  "imgs": 3
+ },
+ {
+  "key": "samsung-galaxy-tab-a9-5g",
+  "vendor": 0,
+  "cat": "Tablets",
+  "name": "Samsung Galaxy Tab A9+ 5G (8GB/128GB, Graphite)",
+  "brand": "Samsung",
+  "q": "SAMSUNG Galaxy Tab A9 8 GB RAM 128 GB ROM 11.0 inch with Wi-Fi+5G Tablet (Graphite)",
+  "must": [
+   "samsung",
+   "galaxy",
+   "tab",
+   "a9"
+  ],
+  "retail": 19999,
+  "wholesale": 17400,
+  "moq": 5,
+  "stock": 40,
+  "discount": null,
+  "specs": {
+   "RAM": "8 GB",
+   "Storage": "128 GB",
+   "Display": "11 inch 90Hz",
+   "Battery": "8000 mAh",
+   "Network": "Wi-Fi + 5G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "samsung-25w-super-fast-charger",
+  "vendor": 0,
+  "cat": "Chargers & Adapters",
+  "name": "Samsung 25W Adaptive Fast Charging Wall Charger (Type-C)",
+  "brand": "Samsung",
+  "q": "SAMSUNG 25 W Adaptive Fast Charging 3 A Wall Charger",
+  "must": [
+   "samsung",
+   "25",
+   "w"
+  ],
+  "retail": 1499,
+  "wholesale": 980,
+  "moq": 50,
+  "stock": 600,
+  "discount": 34,
+  "allow": [
+   "charger",
+   "adapter",
+   "charging",
+   "wall"
+  ],
+  "specs": {
+   "Output": "25 W",
+   "Port": "USB Type-C",
+   "Type": "Wall charger"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "redmi-13c-5g",
+  "vendor": 1,
+  "cat": "Xiaomi & Redmi",
+  "name": "Redmi 13C 5G (4GB/128GB, Startrail Silver)",
+  "brand": "Redmi",
+  "q": "REDMI 13C 5G (Startrail Silver, 128 GB) (4 GB RAM)",
+  "must": [
+   "redmi",
+   "13c"
+  ],
+  "retail": 11999,
+  "wholesale": 10200,
+  "moq": 20,
+  "stock": 300,
+  "discount": 15,
+  "specs": {
+   "RAM": "4 GB",
+   "Storage": "128 GB",
+   "Display": "6.74 inch 90Hz",
+   "Battery": "5000 mAh",
+   "Network": "5G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "redmi-note-13-pro-5g",
+  "vendor": 1,
+  "cat": "Xiaomi & Redmi",
+  "name": "Redmi Note 13 Pro 5G (8GB/256GB, Midnight Black)",
+  "brand": "Redmi",
+  "q": "REDMI Note 13 Pro 5G (Arctic White, 128 GB) (8 GB RAM)",
+  "must": [
+   "redmi",
+   "note",
+   "13",
+   "pro"
+  ],
+  "retail": 24999,
+  "wholesale": 22000,
+  "moq": 10,
+  "stock": 120,
+  "discount": 12,
+  "specs": {
+   "RAM": "8 GB",
+   "Storage": "256 GB",
+   "Display": "6.67 inch AMOLED 120Hz",
+   "Battery": "5100 mAh",
+   "Camera": "200 MP"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "redmi-12-5g",
+  "vendor": 1,
+  "cat": "Xiaomi & Redmi",
+  "name": "Redmi 12 5G (4GB/128GB, Jade Black)",
+  "brand": "Redmi",
+  "q": "REDMI 12 5G (Jade Black, 128 GB) (4 GB RAM)",
+  "must": [
+   "redmi",
+   "12",
+   "5g"
+  ],
+  "retail": 11999,
+  "wholesale": 10100,
+  "moq": 20,
+  "stock": 220,
+  "discount": null,
+  "specs": {
+   "RAM": "4 GB",
+   "Storage": "128 GB",
+   "Display": "6.79 inch 90Hz",
+   "Battery": "5000 mAh",
+   "Network": "5G"
+  },
+  "imgs": 2
+ },
+ {
+  "key": "realme-narzo-70-pro-5g",
+  "vendor": 1,
+  "cat": "realme",
+  "name": "realme Narzo 70 Pro 5G (8GB/128GB, Glass Green)",
+  "brand": "realme",
+  "q": "realme NARZO 70 Pro 5G (Glass Green, 128 GB) (8 GB RAM)",
+  "must": [
+   "realme",
+   "narzo",
+   "70",
+   "pro"
+  ],
+  "retail": 19999,
+  "wholesale": 17300,
+  "moq": 10,
+  "stock": 110,
+  "discount": 14,
+  "specs": {
+   "RAM": "8 GB",
+   "Storage": "128 GB",
+   "Display": "6.67 inch AMOLED 120Hz",
+   "Battery": "5000 mAh",
+   "Network": "5G"
+  },
+  "imgs": 2
+ },
+ {
+  "key": "realme-12x-5g",
+  "vendor": 1,
+  "cat": "realme",
+  "name": "realme 12x 5G (6GB/128GB, Twilight Purple)",
+  "brand": "realme",
+  "q": "realme 12x 5G (Twilight Purple, 128 GB) (6 GB RAM)",
+  "must": [
+   "realme",
+   "12x"
+  ],
+  "retail": 13999,
+  "wholesale": 12000,
+  "moq": 20,
+  "stock": 200,
+  "discount": null,
+  "specs": {
+   "RAM": "6 GB",
+   "Storage": "128 GB",
+   "Display": "6.72 inch 120Hz",
+   "Battery": "5000 mAh",
+   "Network": "5G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "redmi-pad-se",
+  "vendor": 1,
+  "cat": "Tablets",
+  "name": "Redmi Pad SE (4GB/128GB, Graphite Gray)",
+  "brand": "Redmi",
+  "q": "REDMI Pad SE 4 GB RAM 128 GB ROM 11 inch with Wi-Fi Only Tablet (Graphite Gray)",
+  "must": [
+   "redmi",
+   "pad",
+   "se"
+  ],
+  "retail": 12999,
+  "wholesale": 11100,
+  "moq": 10,
+  "stock": 65,
+  "discount": null,
+  "specs": {
+   "RAM": "4 GB",
+   "Storage": "128 GB",
+   "Display": "11 inch 90Hz",
+   "Battery": "8000 mAh",
+   "Network": "Wi-Fi"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "mi-power-bank-3i-20000",
+  "vendor": 1,
+  "cat": "Power Banks",
+  "name": "Mi 20000mAh 22.5W Compact Pocket-size Power Bank (Black)",
+  "brand": "Mi",
+  "q": "Mi 20000 mAh 18 W Power Bank (Midnight Black, Lithium Polymer) 3i",
+  "must": [
+   "mi",
+   "20000"
+  ],
+  "retail": 2499,
+  "wholesale": 1750,
+  "moq": 25,
+  "stock": 400,
+  "discount": 30,
+  "allow": [
+   "power",
+   "bank"
+  ],
+  "specs": {
+   "Capacity": "20000 mAh",
+   "Output": "22.5 W",
+   "Ports": "Type-C + USB-A"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "vivo-t5x-5g",
+  "vendor": 2,
+  "cat": "Vivo & iQOO",
+  "name": "Vivo T5x 5G (6GB/128GB, Cosmic Green)",
+  "brand": "Vivo",
+  "q": "vivo T5x 5G (Cosmic Green, 128 GB)",
+  "must": [
+   "vivo",
+   "t5x"
+  ],
+  "retail": 16999,
+  "wholesale": 14600,
+  "moq": 20,
+  "stock": 250,
+  "discount": 14,
+  "specs": {
+   "RAM": "6 GB",
+   "Storage": "128 GB",
+   "Display": "6.72 inch 120Hz",
+   "Battery": "6000 mAh",
+   "Network": "5G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "vivo-t5-lite-5g",
+  "vendor": 2,
+  "cat": "Vivo & iQOO",
+  "name": "Vivo T5 Lite 5G (6GB/128GB, Wave Blue)",
+  "brand": "Vivo",
+  "q": "vivo T5 Lite 44W 5G (Wave Blue, 128 GB)",
+  "must": [
+   "vivo",
+   "t5",
+   "lite"
+  ],
+  "retail": 13999,
+  "wholesale": 11900,
+  "moq": 10,
+  "stock": 95,
+  "discount": 15,
+  "specs": {
+   "RAM": "6 GB",
+   "Storage": "128 GB",
+   "Charging": "44 W",
+   "Network": "5G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "iqoo-z9-5g",
+  "vendor": 2,
+  "cat": "Vivo & iQOO",
+  "name": "iQOO Z9 5G (8GB/128GB, Brushed Green)",
+  "brand": "iQOO",
+  "q": "iQOO Z9 5G (Brushed Green, 128 GB) (8 GB RAM)",
+  "must": [
+   "iqoo",
+   "z9"
+  ],
+  "retail": 19999,
+  "wholesale": 17500,
+  "moq": 10,
+  "stock": 105,
+  "discount": null,
+  "specs": {
+   "RAM": "8 GB",
+   "Storage": "128 GB",
+   "Display": "6.67 inch AMOLED 120Hz",
+   "Battery": "5000 mAh",
+   "Network": "5G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "motorola-g06-power",
+  "vendor": 2,
+  "cat": "Other Android",
+  "name": "Motorola G06 Power (4GB/64GB, Pantone Tendril)",
+  "brand": "Motorola",
+  "q": "MOTOROLA g06 power (Pantone Tapestry, 64 GB)",
+  "must": [
+   "motorola",
+   "g06",
+   "power"
+  ],
+  "retail": 8999,
+  "wholesale": 7500,
+  "moq": 20,
+  "stock": 130,
+  "discount": null,
+  "specs": {
+   "RAM": "4 GB",
+   "Storage": "64 GB",
+   "Battery": "7000 mAh",
+   "Network": "4G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "realme-buds-air-6",
+  "vendor": 2,
+  "cat": "True Wireless Earbuds",
+  "name": "realme Buds Air 6 TWS Earbuds (Forest Green)",
+  "brand": "realme",
+  "q": "realme Buds Air 6 with 50dB ANC Bluetooth Headset (Forest Green, True Wireless)",
+  "must": [
+   "realme",
+   "buds",
+   "air",
+   "6"
+  ],
+  "retail": 3299,
+  "wholesale": 2450,
+  "moq": 25,
+  "stock": 350,
+  "discount": 26,
+  "allow": [
+   "buds",
+   "earbuds"
+  ],
+  "specs": {
+   "Type": "True wireless",
+   "ANC": "Up to 50 dB",
+   "Battery": "Up to 40 hours with case"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "boat-airdopes-311-pro",
+  "vendor": 2,
+  "cat": "True Wireless Earbuds",
+  "name": "boAt Airdopes 311 Pro TWS Earbuds",
+  "brand": "boAt",
+  "q": "boAt Airdopes 311 Pro Bluetooth Headset (Active Black, True Wireless)",
+  "must": [
+   "boat",
+   "airdopes",
+   "311"
+  ],
+  "retail": 1499,
+  "wholesale": 1050,
+  "moq": 50,
+  "stock": 700,
+  "discount": 30,
+  "allow": [
+   "airdopes",
+   "earbuds"
+  ],
+  "specs": {
+   "Type": "True wireless",
+   "Battery": "Up to 50 hours with case",
+   "Charging": "Type-C ASAP Charge"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "apple-iphone-15-plus",
+  "vendor": 3,
+  "cat": "Apple iPhone",
+  "name": "Apple iPhone 15 Plus (128GB, Pink)",
+  "brand": "Apple",
+  "q": "Apple iPhone 15 Plus (Pink, 128 GB)",
+  "must": [
+   "apple",
+   "iphone",
+   "15",
+   "plus"
+  ],
+  "retail": 89900,
+  "wholesale": 80900,
+  "moq": 3,
+  "stock": 24,
+  "discount": 10,
+  "specs": {
+   "Storage": "128 GB",
+   "Display": "6.7 inch Super Retina XDR",
+   "Chip": "A16 Bionic",
+   "Camera": "48 MP",
+   "Network": "5G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "apple-20w-usb-c-adapter",
+  "vendor": 3,
+  "cat": "Chargers & Adapters",
+  "name": "Apple 20W USB-C Power Charging Adapter (iPhone, iPad, AirPods)",
+  "brand": "Apple",
+  "q": "Apple 20W USB-C Power Charging Adapter",
+  "must": [
+   "apple",
+   "20w"
+  ],
+  "retail": 1900,
+  "wholesale": 1450,
+  "moq": 25,
+  "stock": 500,
+  "discount": 24,
+  "allow": [
+   "charger",
+   "adapter",
+   "charging"
+  ],
+  "specs": {
+   "Output": "20 W",
+   "Port": "USB Type-C",
+   "Type": "Wall adapter"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "poco-m7-pro-5g",
+  "vendor": 3,
+  "cat": "Other Android",
+  "name": "POCO M7 Pro 5G (6GB/128GB, Lavender Frost)",
+  "brand": "POCO",
+  "q": "POCO M7 Pro 5G (Lavender Frost, 128 GB)",
+  "must": [
+   "poco",
+   "m7",
+   "pro"
+  ],
+  "retail": 14999,
+  "wholesale": 12700,
+  "moq": 20,
+  "stock": 210,
+  "discount": 15,
+  "specs": {
+   "RAM": "6 GB",
+   "Storage": "128 GB",
+   "Display": "6.79 inch 90Hz",
+   "Battery": "5000 mAh",
+   "Network": "5G"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "infinix-note-40-5g",
+  "vendor": 3,
+  "cat": "Other Android",
+  "name": "Infinix Note 40 5G (8GB/256GB, Titan Gold)",
+  "brand": "Infinix",
+  "q": "Infinix Note 40 5G (Titan Gold, 256 GB) (8 GB RAM)",
+  "must": [
+   "infinix",
+   "note",
+   "40"
+  ],
+  "retail": 16999,
+  "wholesale": 14600,
+  "moq": 15,
+  "stock": 115,
+  "discount": null,
+  "specs": {
+   "RAM": "8 GB",
+   "Storage": "256 GB",
+   "Display": "6.78 inch AMOLED 120Hz",
+   "Battery": "5000 mAh",
+   "Network": "5G"
+  },
+  "imgs": 3
+ },
+ {
+  "key": "boat-wave-call-2",
+  "vendor": 3,
+  "cat": "Smart Watches",
+  "name": "boAt Wave Call 2 Plus 1.96\" Bluetooth Calling Smartwatch",
+  "brand": "boAt",
+  "q": "boAt Wave Call 2 Smartwatch (Active Black, Free Size)",
+  "must": [
+   "boat",
+   "wave",
+   "call"
+  ],
+  "retail": 2499,
+  "wholesale": 1790,
+  "moq": 25,
+  "stock": 260,
+  "discount": 28,
+  "allow": [
+   "smartwatch",
+   "watch"
+  ],
+  "specs": {
+   "Display": "1.96 inch",
+   "Calling": "Bluetooth calling",
+   "Battery": "Up to 7 days"
+  },
+  "imgs": 4
+ },
+ {
+  "key": "ambrane-10000-power-bank",
+  "vendor": 3,
+  "cat": "Power Banks",
+  "name": "Ambrane 10000mAh MagSafe Wireless Power Bank 22.5W (Slim)",
+  "brand": "Ambrane",
+  "q": "Ambrane 10000 mAh 20 W Compact Power Bank (Black, Lithium Polymer)",
+  "must": [
+   "ambrane",
+   "10000"
+  ],
+  "retail": 1599,
+  "wholesale": 1090,
+  "moq": 30,
+  "stock": 450,
+  "discount": 32,
+  "allow": [
+   "power",
+   "bank"
+  ],
+  "specs": {
+   "Capacity": "10000 mAh",
+   "Output": "22.5 W",
+   "Type": "MagSafe wireless + USB-C"
+  },
+  "imgs": 4
+ }
+]

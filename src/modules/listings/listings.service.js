@@ -24,7 +24,7 @@ const CARD = `
          p.thumbnail_url, COALESCE(jsonb_array_length(p.images), 0) AS image_count,
          COALESCE(sp.sale_price, sp.price) AS price, sp.mrp, sp.stock_quantity AS stock,
          sp.approval_status, sp.listing_status, sp.rejection_reason, sp.sold_count, sp.created_at, p.sku,
-         sp.qc_status, sp.qc_score, sp.merch_section, sp.sell_b2c, sp.sell_b2b, sp.wholesale_price, sp.min_order_qty`
+         sp.qc_status, sp.qc_score, sp.merch_section, sp.sell_b2c, sp.sell_b2b, sp.wholesale_price, sp.min_order_qty, sp.b2b_discount_pct`
 
 function toCard(r) {
   return {
@@ -32,6 +32,7 @@ function toCard(r) {
     price: Number(r.price), mrp: r.mrp != null ? Number(r.mrp) : null, image_count: Number(r.image_count),
     stock: Number(r.stock), sold_count: Number(r.sold_count || 0),
     wholesale_price: r.wholesale_price != null ? Number(r.wholesale_price) : null, min_order_qty: Number(r.min_order_qty || 1),
+    b2b_discount_pct: r.b2b_discount_pct != null ? Number(r.b2b_discount_pct) : null,
   }
 }
 
@@ -78,7 +79,11 @@ export const listingsService = {
               COUNT(*) FILTER (WHERE sp.approval_status = 'PENDING')::int AS pending,
               COUNT(*) FILTER (WHERE sp.approval_status = 'REJECTED')::int AS rejected,
               COUNT(*) FILTER (WHERE p.condition = ANY($1))::int AS used,
-              COUNT(*) FILTER (WHERE sp.stock_quantity = 0)::int AS out_of_stock
+              COUNT(*) FILTER (WHERE sp.stock_quantity = 0)::int AS out_of_stock,
+              COUNT(*) FILTER (WHERE sp.sell_b2b)::int AS b2b_listings,
+              COUNT(DISTINCT p.owner_vendor_id) FILTER (WHERE sp.sell_b2b)::int AS b2b_vendors,
+              COALESCE(SUM(sp.stock_quantity) FILTER (WHERE sp.sell_b2b), 0)::int AS b2b_units,
+              COUNT(*) FILTER (WHERE sp.sell_b2b AND sp.b2b_discount_pct > 0)::int AS b2b_deals
          ${BASE}${vid ? ' AND p.owner_vendor_id = $2' : ''}`, vid ? [USED, vid] : [USED])
     return rows[0]
   },
