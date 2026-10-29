@@ -1,4 +1,6 @@
+import crypto from 'node:crypto'
 import { query, getClient } from '../../config/database.js'
+import { razorpay, getRazorpayKeyId, getRazorpayKeySecret } from '../../config/razorpay.js'
 import { logger } from '../../config/logger.js'
 import { NotificationsRepository } from '../notifications/notifications.repository.js'
 import { sendPush } from '../../utils/pushNotification.js'
@@ -7,6 +9,12 @@ import { BULK_FROM, demandTags, matchInventory, modelKey, parseStorage } from '.
 const err = (statusCode, message, code = 'B2B_ERROR', extra = {}) => Object.assign(new Error(message), { statusCode, code, ...extra })
 const round2 = (n) => Math.round(Number(n) * 100) / 100
 const SELLER_ELIGIBLE = ['ACTIVE', 'VERIFIED']
+const paise = (n) => Math.round(round2(n) * 100)
+export const onlinePaymentsReady = () => Boolean(razorpay && getRazorpayKeyId() && getRazorpayKeySecret())
+const safeEqual = (a, b) => {
+  const x = Buffer.from(String(a)); const y = Buffer.from(String(b))
+  return x.length === y.length && crypto.timingSafeEqual(x, y)
+}
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const COND = ['NEW', 'OPEN_BOX', 'REFURBISHED', 'USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR']
 const DISPLAY_PREFS = ['ANY', 'ORIGINAL', 'GRADE_AB']
@@ -108,18 +116,38 @@ async function postSettlement(client, order, qty) {
   return { gross, comm, payable: round2(gross - comm) }
 }
 
-/** Gives money back to the buyer — only when they paid from the wallet (admin-recorded offline payments move no ledger money). */
+/** Money back to the buyer's WALLET when they paid from it, or back to the card / UPI / bank they paid with when it was Razorpay
+ *  (admin-recorded offline payments move no money). */
 async function refundBuyer(client, order, units, tag) {
   if (!order.payment_id || !order.buyer_vendor_id) return 0
-  const p = (await client.query(`SELECT method FROM b2b_payments WHERE id=$1`, [order.payment_id])).rows[0]
-  if (p?.method !== 'WALLET') return 0
+  const p = (await client.query(`SELECT method, reference FROM b2b_payments WHERE id=$1`, [order.payment_id])).rows[0]
   const amount = round2(Number(order.unit_price) * units)
   if (!(amount > 0)) return 0
+  const key = `b2b:${order.id}:REFUND:${tag}`
+  if (p?.method === 'RAZORPAY') {
+    await refundOnline(p.reference, amount, key)
+    return amount
+  }
+  if (p?.method !== 'WALLET') return 0
   await lockSettlement(client, order.buyer_vendor_id)
   await ledgerEntry(client, order.buyer_vendor_id, amount, {
-    reasonCode: 'B2B_REFUND', reason: `Refund · ${order.order_number}`, referenceId: order.id, key: `b2b:${order.id}:REFUND:${tag}`,
+    reasonCode: 'B2B_REFUND', reason: `Refund · ${order.order_number}`, referenceId: order.id, key,
   })
   return amount
+}
+
+/** Razorpay refund of part of a payment. Idempotent per `key`, so a retry after a half-finished attempt never pays twice. */
+async function refundOnline(paymentId, amount, key) {
+  if (!onlinePaymentsReady()) throw err(503, 'Online refunds are not available right now. Please try again shortly.', 'PAYMENTS_UNAVAILABLE')
+  try {
+    const done = await razorpay.payments.fetchMultipleRefund(paymentId)
+    if ((done?.items || []).some((x) => x.notes?.key === key)) return
+    await razorpay.payments.refund(paymentId, { amount: paise(amount), notes: { key, kind: 'B2B_REFUND' } })
+  } catch (e) {
+    if (e?.statusCode && e.code) throw e
+    logger.error({ err: e?.error || e?.message, paymentId, key }, 'B2B Razorpay refund failed')
+    throw err(502, 'The refund could not be sent to the buyer\'s payment method. Nothing was changed — please try again.', 'REFUND_FAILED')
+  }
 }
 
 async function finishRequirementIfDone(client, requirementId) {
@@ -392,6 +420,157 @@ export const b2b = {
     const orders = await this.award(reqId, [{ quoteId, quantity: qty }], actor)
     const o = orders[0]
     return { requirement_id: reqId, order_id: o.id, order_number: o.order_number, quantity: qty, unit_price: l.wholesale_price, total: Number(o.subtotal), seller: l.seller.name }
+  },
+
+  // ── Razorpay Checkout for wholesale purchases ───────────────────────────
+  /** Start (or resume) one Razorpay Checkout for the unpaid orders of the given requirements (all must be the caller's). */
+  async razorpayOrder(requirementIds, actor) {
+    if (!onlinePaymentsReady()) throw err(503, 'Online payments are not available right now', 'PAYMENTS_UNAVAILABLE')
+    const ids = [...new Set((requirementIds || []).map(String).filter((i) => UUID_RE.test(i)))]
+    if (!ids.length || ids.length > 25) throw err(400, 'Choose the orders you want to pay for', 'VALIDATION_ERROR')
+    const { rows } = await query(
+      `SELECT r.id, r.requirement_number, r.buyer_vendor_id, COALESCE(SUM(o.subtotal), 0) AS due, COUNT(o.id)::int AS n
+         FROM b2b_requirements r LEFT JOIN b2b_orders o ON o.requirement_id = r.id AND o.status = 'PENDING_PAYMENT'
+        WHERE r.id = ANY($1) GROUP BY r.id`, [ids])
+    if (rows.length !== ids.length) throw err(404, 'Order not found', 'NOT_FOUND')
+    for (const r of rows) {
+      if (r.buyer_vendor_id !== actor.vendorId) throw err(403, 'Only the buyer can pay', 'FORBIDDEN')
+      if (!r.n) throw err(409, `Nothing to pay for ${r.requirement_number}`, 'NOTHING_TO_PAY')
+    }
+    const amount = round2(rows.reduce((sum, r) => sum + Number(r.due), 0))
+    const open = (await query(
+      `SELECT * FROM b2b_razorpay_orders WHERE vendor_id = $1 AND status = 'CREATED' AND amount = $2
+          AND requirement_ids @> $3::uuid[] AND requirement_ids <@ $3::uuid[] ORDER BY created_at DESC LIMIT 1`, [actor.vendorId, amount, ids])).rows[0]
+    let order = open
+    if (!order) {
+      let rzp
+      try {
+        rzp = await razorpay.orders.create({
+          amount: paise(amount), currency: 'INR', receipt: `b2b-${Date.now()}`.slice(0, 40),
+          notes: { kind: 'B2B_PURCHASE', vendor_id: actor.vendorId, requirements: rows.map((r) => r.requirement_number).join(',').slice(0, 250) },
+        })
+      } catch (e) {
+        logger.error({ err: e?.error || e?.message }, 'B2B Razorpay order creation failed')
+        throw err(502, 'Could not start the payment. Please try again.', 'PAYMENTS_UNAVAILABLE')
+      }
+      order = (await query(
+        `INSERT INTO b2b_razorpay_orders (vendor_id, razorpay_order_id, amount, requirement_ids) VALUES ($1,$2,$3,$4) RETURNING *`,
+        [actor.vendorId, rzp.id, amount, ids])).rows[0]
+    }
+    return {
+      keyId: getRazorpayKeyId(), orderId: order.razorpay_order_id, amount: paise(amount), amountRupees: amount, currency: 'INR',
+      name: 'Dealker', description: `Wholesale order${rows.length === 1 ? ` ${rows[0].requirement_number}` : ` · ${rows.length} items`}`, requirementIds: ids,
+    }
+  },
+
+  /** The app's Checkout success callback: signature first, then Razorpay itself, then escrow. */
+  async razorpayVerify(input = {}, actor) {
+    const orderId = String(input.razorpayOrderId || '').slice(0, 64); const paymentId = String(input.razorpayPaymentId || '').slice(0, 64)
+    const signature = String(input.razorpaySignature || '').slice(0, 128)
+    if (!orderId || !paymentId || !signature) throw err(422, 'Payment details are incomplete', 'VALIDATION_ERROR')
+    const o = (await query(`SELECT * FROM b2b_razorpay_orders WHERE razorpay_order_id = $1`, [orderId])).rows[0]
+    if (!o || o.vendor_id !== actor.vendorId) throw err(404, 'Payment not found', 'NOT_FOUND')
+    const expected = crypto.createHmac('sha256', getRazorpayKeySecret()).update(`${orderId}|${paymentId}`).digest('hex')
+    if (!safeEqual(expected, signature)) {
+      logger.warn({ orderId }, 'B2B Razorpay: signature mismatch')
+      throw err(400, 'We could not verify this payment. If money was deducted it will be refunded automatically.', 'PAYMENT_VERIFICATION_FAILED')
+    }
+    await this.settleRazorpay(orderId, paymentId, 'APP_VERIFY')
+    return this.razorpayStatus(orderId)
+  },
+
+  /** Recovery when the app never got the callback (closed, offline): ask Razorpay whether the order was paid. */
+  async razorpaySync(razorpayOrderId, actor) {
+    const o = (await query(`SELECT * FROM b2b_razorpay_orders WHERE razorpay_order_id = $1`, [String(razorpayOrderId || '')])).rows[0]
+    if (!o || o.vendor_id !== actor.vendorId) throw err(404, 'Payment not found', 'NOT_FOUND')
+    if (o.status !== 'PAID') {
+      let items = []
+      try { items = (await razorpay.orders.fetchPayments(o.razorpay_order_id))?.items || [] } catch (e) {
+        throw err(502, 'Could not check the payment. Please try again.', 'PAYMENTS_UNAVAILABLE')
+      }
+      const hit = items.find((p) => ['captured', 'authorized'].includes(p.status))
+      if (!hit) throw err(409, 'No completed payment was found for this order yet', 'PAYMENT_NOT_COMPLETE')
+      await this.settleRazorpay(o.razorpay_order_id, hit.id, 'APP_SYNC')
+    }
+    return this.razorpayStatus(o.razorpay_order_id)
+  },
+
+  async razorpayStatus(razorpayOrderId) {
+    const o = (await query(`SELECT * FROM b2b_razorpay_orders WHERE razorpay_order_id = $1`, [razorpayOrderId])).rows[0]
+    const { rows } = await query(
+      `SELECT id, requirement_id, order_number, status, payment_status, subtotal FROM b2b_orders WHERE requirement_id = ANY($1) ORDER BY created_at`, [o.requirement_ids])
+    return { status: o.status, amount: Number(o.amount), paymentId: o.razorpay_payment_id, note: o.note, requirementIds: o.requirement_ids,
+      orders: rows.map((x) => ({ id: x.id, requirementId: x.requirement_id, orderNumber: x.order_number, status: x.status, paymentStatus: x.payment_status, total: Number(x.subtotal) })) }
+  },
+
+  /** Webhook entry (`payment.captured` / `order.paid`). False when the order is not a wholesale checkout. */
+  async completeRazorpayByOrder(rzpOrderId, rzpPaymentId) {
+    const o = (await query(`SELECT 1 FROM b2b_razorpay_orders WHERE razorpay_order_id = $1`, [rzpOrderId])).rows[0]
+    if (!o) return false
+    await this.settleRazorpay(rzpOrderId, rzpPaymentId, 'WEBHOOK')
+    return true
+  },
+
+  /** The one idempotent place a verified Razorpay payment becomes escrow. */
+  async settleRazorpay(rzpOrderId, paymentId, source) {
+    const pre = (await query(`SELECT * FROM b2b_razorpay_orders WHERE razorpay_order_id = $1`, [rzpOrderId])).rows[0]
+    if (!pre) throw err(404, 'Payment not found', 'NOT_FOUND')
+    if (pre.status === 'PAID') return { skipped: true }
+    // never trust the client: ask Razorpay what was really paid, capturing it if the account does not auto-capture
+    let pay
+    try {
+      pay = await razorpay.payments.fetch(paymentId)
+      if (pay.order_id !== rzpOrderId) throw err(400, 'This payment belongs to a different order', 'PAYMENT_VERIFICATION_FAILED')
+      if (Number(pay.amount) !== paise(pre.amount)) throw err(400, 'The paid amount does not match', 'AMOUNT_MISMATCH')
+      if (pay.status === 'authorized') pay = await razorpay.payments.capture(paymentId, paise(pre.amount), 'INR')
+    } catch (e) {
+      if (e?.statusCode && e.code) throw e
+      throw err(502, 'Could not confirm the payment with Razorpay. Please try again.', 'PAYMENTS_UNAVAILABLE')
+    }
+    if (pay.status !== 'captured') throw err(409, `The payment is ${pay.status}`, 'PAYMENT_NOT_COMPLETE')
+
+    const actor = { userId: null, vendorId: pre.vendor_id, label: 'Razorpay' }
+    const client = await getClient()
+    let refundNeeded = null
+    try {
+      await client.query('BEGIN')
+      const o = (await client.query(`SELECT * FROM b2b_razorpay_orders WHERE razorpay_order_id = $1 FOR UPDATE`, [rzpOrderId])).rows[0]
+      if (o.status === 'PAID') { await client.query('ROLLBACK'); return { skipped: true } }
+      const reqs = (await client.query(`SELECT * FROM b2b_requirements WHERE id = ANY($1) ORDER BY id FOR UPDATE`, [o.requirement_ids])).rows
+      const due = (await client.query(
+        `SELECT * FROM b2b_orders WHERE requirement_id = ANY($1) AND status = 'PENDING_PAYMENT' ORDER BY id FOR UPDATE`, [o.requirement_ids])).rows
+      const total = round2(due.reduce((sum, x) => sum + Number(x.subtotal), 0))
+      const sameBuyer = reqs.length === o.requirement_ids.length && reqs.every((r) => r.buyer_vendor_id === o.vendor_id)
+      if (!sameBuyer || total !== round2(o.amount)) {
+        // The orders changed after the Checkout started (cancelled, paid another way): hand the money straight back.
+        await client.query(`UPDATE b2b_razorpay_orders SET status = 'FAILED', razorpay_payment_id = $2, note = $3, updated_at = NOW() WHERE id = $1`,
+          [o.id, paymentId, 'Orders changed before payment — refunded'])
+        refundNeeded = round2(o.amount)
+      } else {
+        for (const r of reqs) {
+          const mine = due.filter((x) => x.requirement_id === r.id)
+          const amount = round2(mine.reduce((sum, x) => sum + Number(x.subtotal), 0))
+          const p = (await client.query(
+            `INSERT INTO b2b_payments (requirement_id, payer_vendor_id, amount, method, reference) VALUES ($1,$2,$3,'RAZORPAY',$4) RETURNING *`,
+            [r.id, o.vendor_id, amount, paymentId])).rows[0]
+          await client.query(
+            `UPDATE b2b_orders SET status='PAID', payment_status='ESCROW_HELD', payment_id=$2, payment_method='RAZORPAY', paid_at=NOW(), updated_at=NOW() WHERE id = ANY($1)`,
+            [mine.map((x) => x.id), p.id])
+          if (r.status === 'AWARDED') await client.query(`UPDATE b2b_requirements SET status='IN_FULFILMENT', updated_at=NOW() WHERE id=$1`, [r.id])
+          await event(client, r.id, null, 'PAID', actor, `${inr(amount)} paid with Razorpay and held in escrow for ${mine.length} order(s)`)
+          await notifyVendors(client, mine.map((x) => x.seller_vendor_id), 'Payment received',
+            `Payment for ${r.product_name} is secured in escrow — please pack and dispatch`, { requirementId: r.id, kind: 'B2B_PAID' })
+        }
+        await client.query(`UPDATE b2b_razorpay_orders SET status = 'PAID', razorpay_payment_id = $2, paid_at = NOW(), updated_at = NOW() WHERE id = $1`, [o.id, paymentId])
+        logger.info({ rzpOrderId, source, requirements: reqs.length }, 'B2B Razorpay payment settled')
+      }
+      await commit(client)
+    } catch (x) { await client.query('ROLLBACK').catch(() => {}); throw x } finally { client.release() }
+    if (refundNeeded != null) {
+      await refundOnline(paymentId, refundNeeded, `b2b-unapplied:${paymentId}`)
+      throw err(409, 'These orders changed while you were paying, so the payment was returned to you. Please check your orders and pay again.', 'ORDERS_CHANGED')
+    }
+    return { settled: true }
   },
 
   /**
@@ -764,7 +943,7 @@ export const b2b = {
       await event(client, r.id, o.id, 'ORDER_CANCELLED', actor, reason.trim())
       if (o.buyer_vendor_id) {
         await notifyVendors(client, [o.buyer_vendor_id], 'Order cancelled by seller',
-          `${o.order_number} was cancelled${refunded ? ` and ${inr(refunded)} returned to your wallet` : ''}. Pick another offer for the remaining units.`, { orderId, requirementId: r.id, kind: 'B2B_CANCELLED' })
+          `${o.order_number} was cancelled${refunded ? ` and ${inr(refunded)} refunded to you` : ''}. Pick another offer for the remaining units.`, { orderId, requirementId: r.id, kind: 'B2B_CANCELLED' })
       }
       await finishRequirementIfDone(client, r.id)
       await commit(client)

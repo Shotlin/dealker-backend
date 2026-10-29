@@ -4,7 +4,8 @@ import { requireVendorScope } from '../../middlewares/vendor-scope.js'
 const uuid = { type: 'string', format: 'uuid' }
 const wrap = (fn) => async (req, reply) => {
   try { return await fn(req, reply) } catch (e) {
-    if (e?.statusCode && e.statusCode < 500) {
+    // 502/503 are deliberate (payment gateway down / refund could not be sent): show their message instead of a generic error
+    if (e?.statusCode && (e.statusCode < 500 || [502, 503].includes(e.statusCode))) {
       const wallet = e.required != null ? { required: e.required, balance: e.balance, shortfall: e.shortfall } : {}
       return reply.code(e.statusCode).send({ success: false, message: e.message, code: e.code, ...wallet })
     }
@@ -49,6 +50,19 @@ export async function vendorB2bRoutes(fastify) {
     preHandler: pre,
     schema: { params: { type: 'object', properties: { id: uuid }, required: ['id'] }, body: { type: 'object', required: ['quantity'], properties: { quantity: { type: 'integer', minimum: 1, maximum: 100000 } }, additionalProperties: false } },
   }, wrap(async (req, reply) => reply.code(201).send({ success: true, data: await b2b.wholesaleBuy(req.params.id, req.body.quantity, actor(req)) })))
+  // Razorpay Checkout for one or many wholesale orders (the cart pays once)
+  fastify.post('/pay/razorpay/order', {
+    preHandler: pre,
+    schema: { body: { type: 'object', required: ['requirementIds'], properties: { requirementIds: { type: 'array', items: uuid, minItems: 1, maxItems: 25 } }, additionalProperties: false } },
+  }, wrap(async (req) => ({ success: true, data: await b2b.razorpayOrder(req.body.requirementIds, actor(req)) })))
+  fastify.post('/pay/razorpay/verify', {
+    preHandler: pre,
+    schema: { body: { type: 'object', required: ['razorpayOrderId', 'razorpayPaymentId', 'razorpaySignature'], properties: { razorpayOrderId: { type: 'string', maxLength: 64 }, razorpayPaymentId: { type: 'string', maxLength: 64 }, razorpaySignature: { type: 'string', maxLength: 128 } }, additionalProperties: false } },
+  }, wrap(async (req) => ({ success: true, data: await b2b.razorpayVerify(req.body, actor(req)) })))
+  fastify.post('/pay/razorpay/sync', {
+    preHandler: pre,
+    schema: { body: { type: 'object', required: ['razorpayOrderId'], properties: { razorpayOrderId: { type: 'string', maxLength: 64 } }, additionalProperties: false } },
+  }, wrap(async (req) => ({ success: true, data: await b2b.razorpaySync(req.body.razorpayOrderId, actor(req)) })))
   fastify.get('/demand/summary', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.demandSummary(req.vendorId) })))
   fastify.get('/wallet', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.walletFor(req.vendorId) })))
   fastify.get('/requirements/:id/match', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.matchFor(req.params.id, req.vendorId) })))

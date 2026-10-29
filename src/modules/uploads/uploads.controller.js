@@ -1,4 +1,3 @@
-import http from 'node:http'
 import https from 'node:https'
 
 import { success, error } from '../../utils/apiResponse.js'
@@ -128,14 +127,13 @@ export class UploadsController {
       return reply.code(400).send(error('Missing "url" query parameter', 'MISSING_URL'))
     }
 
-    // Security: only proxy from Cloudinary
     try {
-      const parsed = new URL(url)
-      if (!parsed.hostname.endsWith('cloudinary.com')) {
-        return reply.code(403).send(error('Only Cloudinary URLs are allowed', 'FORBIDDEN_DOMAIN'))
-      }
+      new URL(url)
     } catch {
       return reply.code(400).send(error('Invalid URL', 'INVALID_URL'))
+    }
+    if (!isAllowedCloudinaryUrl(url)) {
+      return reply.code(403).send(error('Only secure Cloudinary URLs are allowed', 'FORBIDDEN_DOMAIN'))
     }
 
     try {
@@ -214,6 +212,17 @@ export class UploadsController {
   }
 }
 
+export function isAllowedCloudinaryUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl)
+    const host = parsed.hostname.toLowerCase()
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password &&
+      !parsed.port && (host === 'cloudinary.com' || host.endsWith('.cloudinary.com'))
+  } catch {
+    return false
+  }
+}
+
 function buildProxyCandidates(rawUrl) {
   const candidates = new Set([rawUrl])
 
@@ -245,8 +254,12 @@ function downloadProxyCandidate(rawUrl, redirectCount = 0) {
       return
     }
 
-    const client = parsed.protocol === 'http:' ? http : https
-    const request = client.get(
+    // Validate every redirect too, before any network request is made.
+    if (!isAllowedCloudinaryUrl(parsed.toString())) {
+      reject(new Error('Proxy destination is not an allowed Cloudinary URL'))
+      return
+    }
+    const request = https.get(
       parsed,
       {
         headers: {
@@ -264,7 +277,13 @@ function downloadProxyCandidate(rawUrl, redirectCount = 0) {
             return
           }
 
-          const nextUrl = new URL(location, parsed).toString()
+          let nextUrl
+          try {
+            nextUrl = new URL(location, parsed).toString()
+          } catch (error) {
+            reject(error)
+            return
+          }
           downloadProxyCandidate(nextUrl, redirectCount + 1)
             .then(resolve)
             .catch(reject)

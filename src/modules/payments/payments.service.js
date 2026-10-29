@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import RazorpaySdk from 'razorpay'
 import { logger } from '../../config/logger.js'
 import * as sellRazorpay from '../sell-requests/sell-razorpay.service.js'
+import { b2b } from '../b2b/b2b.service.js'
 import { razorpay, getRazorpayKeyId, getRazorpayKeySecret, getRazorpayWebhookSecret } from '../../config/razorpay.js'
 import { orderQueue } from '../../config/bullmq.js'
 import { getClient } from '../../config/database.js'
@@ -621,6 +622,11 @@ export class PaymentsService {
             return true // ours, but not applied yet — Razorpay retries the delivery
           })) {
             // A buyer's payment for a sold phone (sell-your-phone journey) — handled above.
+          } else if (await b2b.completeRazorpayByOrder(rzpOrderId, rzpPaymentId).catch((err) => {
+            logger.warn({ err: err.message, rzpOrderId }, 'Wholesale payment webhook completion failed')
+            return true // ours, but not applied yet — Razorpay retries the delivery
+          })) {
+            // A vendor's Razorpay payment for wholesale (B2B) orders — settled above.
           } else {
             // Not a checkout order payment — check whether it's a wallet
             // top-up instead (a completely separate Razorpay order created
