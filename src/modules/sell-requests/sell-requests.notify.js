@@ -67,6 +67,7 @@ const COPY = {
     c: (r) => ({ title: 'A buyer has been found', body: `Your ${r.model_name} request ${r.code} has a buyer at ${rupees(r.final_price)}. We'll confirm shortly.` }),
     v: (r) => ({ to: 'ASSIGNED', title: 'Your offer was selected', body: `${r.code} · ${r.model_name} at ${rupees(r.final_price)}.` }),
   },
+  OFFER_RECEIVED: { c: (r, x) => ({ title: 'You got an offer!', body: `A buyer offered ${rupees(x.amount)} for your ${r.model_name}. Open Dealker to look at it and choose.` }) },
   OFFER_DECLINED: { v: (r) => ({ to: 'OFFERED', title: 'Offer not selected', body: `${r.code} · ${r.model_name} went to another vendor.` }) },
   APPROVED: {
     c: (r) => ({ title: 'Request approved', body: `${r.code} for your ${r.model_name} is approved at ${rupees(r.final_price ?? r.quote)}.` }),

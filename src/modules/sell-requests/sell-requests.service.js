@@ -621,6 +621,7 @@ export async function mine(userId, kind, { page = 1, limit = 20 } = {}) {
       `SELECT r.id, COALESCE(NULLIF(m.image_url, ''), pp.thumbnail_url) AS image_url,
               (SELECT COUNT(*)::int FROM sell_request_offers o WHERE o.request_id = r.id AND o.status IN ('OPEN','ACCEPTED')) AS offer_count,
               (SELECT MAX(o.amount) FROM sell_request_offers o WHERE o.request_id = r.id AND o.status IN ('OPEN','ACCEPTED')) AS best_offer,
+              (r.offers_close_at IS NULL OR r.offers_close_at > NOW()) AS offers_open,
               (SELECT COUNT(*)::int FROM sell_request_messages g WHERE g.request_id = r.id AND g.sender_role = 'VENDOR' AND g.customer_read_at IS NULL) AS unread
          FROM sell_requests r LEFT JOIN sell_device_models m ON m.id = r.model_id
          -- No catalogue photo for the model yet: borrow the thumbnail of the shop's matching product so the list is never blank.
@@ -635,6 +636,7 @@ export async function mine(userId, kind, { page = 1, limit = 20 } = {}) {
       it.offerCount = e?.offer_count ?? 0
       it.bestOffer = num(e?.best_offer)
       it.unreadMessages = e?.unread ?? 0
+      it.offersOpen = e?.offers_open ?? true
       it.askingPrice = it.expectedPrice
     }
   }
@@ -788,7 +790,7 @@ export const assignVendor = (actor, id, vendorId) => tx(async (client) => {
 
 // ── Vendor offers ───────────────────────────────────────────────────────
 
-export const placeOffer = (actor, id, input) => tx(async (client) => {
+export const placeOffer = (actor, id, input) => { let fresh = null; return tx(async (client) => {
   const amount = Number(input.amount)
   if (!Number.isFinite(amount) || amount <= 0) throw new SellError('VALIDATION', 'Offer amount must be greater than zero', 422)
   const { rows: v } = await client.query(`SELECT 1 FROM vendors WHERE id = $1 AND is_active = TRUE AND status IN ('VERIFIED','ACTIVE') AND deleted_at IS NULL`, [actor.vendorId])
@@ -806,8 +808,9 @@ export const placeOffer = (actor, id, input) => tx(async (client) => {
   } else {
     await client.query(`INSERT INTO sell_request_offers (request_id, vendor_id, amount, note, distance_km) VALUES ($1,$2,$3,$4,$5)`, [id, actor.vendorId, amount, noteOf(input.note) || null, distance])
     await addEvent(client, id, 'QUOTE_RECEIVED', 'Quote Received', actor, { vendorId: actor.vendorId })
+    fresh = amount
   }
-}).then(() => getManage(actor, id))
+}).then(() => { if (fresh != null) notifySellEvent('OFFER_RECEIVED', id, { amount: fresh }); return getManage(actor, id) }) }
 
 export const withdrawOffer = (actor, id) => tx(async (client) => {
   const r = await lock(client, id, actor)

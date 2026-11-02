@@ -167,4 +167,16 @@ d('sell negotiation', () => {
       await q(`UPDATE sell_settings SET hub_banner_url = NULL, hub_step_icons = '[]'::jsonb WHERE id = TRUE`)
     })
   })
+
+  describe('list: is the waiting time still open', () => {
+    it('tells the app when the offer window has closed so it can say "no offers yet" instead of "waiting"', async () => {
+      const r = await listed()
+      expect(r.status).toBe(201)
+      let mine = await call('GET', `${S}/mine`, T.cust)
+      expect(mine.body.data.items.find((i) => i.id === r.data.id).offersOpen).toBe(true)
+      await q(`UPDATE sell_requests SET offers_close_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, [r.data.id])
+      mine = await call('GET', `${S}/mine`, T.cust)
+      expect(mine.body.data.items.find((i) => i.id === r.data.id).offersOpen).toBe(false)
+    })
+  })
 })
