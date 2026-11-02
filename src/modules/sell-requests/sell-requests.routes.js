@@ -15,6 +15,7 @@
 import { requireVendorScope, isPlatformUser } from '../../middlewares/vendor-scope.js'
 import fs from 'node:fs'
 import * as svc from './sell-requests.service.js'
+import * as xp from './exchange-programs.service.js'
 import * as evidence from './evidence.service.js'
 import * as qc from './request-qc.service.js'
 import * as journey from './sell-journey.service.js'
@@ -71,6 +72,17 @@ function customerRoutes(scopeKind) {
 
     fastify.get('/catalog', { preHandler: auth }, wrap(async () => ok(await svc.listModels())))
 
+    if (scopeKind === 'EXCHANGE') {
+      const prodParams = { type: 'object', properties: { productId: { type: 'string', format: 'uuid' } }, required: ['productId'] }
+      // Public: is exchange offered on this product, which old devices count, and what they normally fetch.
+      fastify.get('/for-product/:productId', { schema: { params: prodParams } }, wrap(async (request) => ok(await xp.forProduct(request.params.productId))))
+      // The exchange flow's data: accepted device types (with the questions each needs) and their models.
+      fastify.get('/options/:productId', { preHandler: auth, schema: { params: prodParams } }, wrap(async (request) => {
+        const o = await xp.optionsForProduct(request.params.productId)
+        return ok({ eligible: true, price: o.price, maxValue: o.maxValue, types: o.types, models: o.models.map(svc.serializeModel) })
+      }))
+    }
+
     if (scopeKind === 'SELL') {
       // ── sell-your-phone journey ──
       /** Windows, switches and limits the app needs to render the journey. */
@@ -106,7 +118,9 @@ function customerRoutes(scopeKind) {
 
     fastify.post('/quote', { preHandler: auth }, wrap(async (request) => {
       const q = await svc.quote(request.body || {})
-      return ok({ quote: q.value, condition: q.condition, base: q.base, deductions: q.deductions })
+      // With a productId the answer is also capped to what that product accepts as credit.
+      const limit = scopeKind === 'EXCHANGE' && request.body?.productId ? await xp.creditLimit(request.body.productId, q.model.category) : null
+      return ok({ quote: q.value, credit: limit == null ? q.value : Math.min(q.value, limit), condition: q.condition, base: q.base, deductions: q.deductions })
     }))
 
     fastify.post('/', { preHandler: auth }, wrap(async (request, reply) => {
@@ -184,6 +198,18 @@ function manageRoutes(scopeKind) {
 
     // Device catalogue is shared by both sections (readable here, edited under sell settings).
     fastify.get('/models', { preHandler: pre(guard(VIEW)) }, wrap(async (request) => ok(await svc.listModels({ includeInactive: isPlatformUser(request.user) }))))
+
+    if (scopeKind === 'EXCHANGE') {
+      // Which products can be bought with an exchange, and which old devices count — edited from the dashboard.
+      const pid = { params: idParams }
+      fastify.get('/types', { preHandler: pre(guard(VIEW)) }, wrap(async (request) => ok(await xp.listTypes({ includeInactive: isPlatformUser(request.user) }))))
+      fastify.post('/types', { preHandler: pre(platformOnly(MANAGE)) }, wrap(async (request, reply) => reply.code(201).send(ok(await xp.saveType(request.body || {})))))
+      fastify.put('/types/:key', { preHandler: pre(platformOnly(MANAGE)) }, wrap(async (request) => ok(await xp.saveType(request.body || {}, decodeURIComponent(request.params.key)))))
+      fastify.get('/programs', { preHandler: pre(platformOnly(VIEW)) }, wrap(async () => ok(await xp.listPrograms())))
+      fastify.post('/programs', { preHandler: pre(platformOnly(MANAGE)) }, wrap(async (request, reply) => reply.code(201).send(ok(await xp.createProgram(request.body || {})))))
+      fastify.put('/programs/:id', { preHandler: pre(platformOnly(MANAGE)), schema: pid }, wrap(async (request) => ok(await xp.updateProgram(request.params.id, request.body || {}))))
+      fastify.delete('/programs/:id', { preHandler: pre(platformOnly(MANAGE)), schema: pid }, wrap(async (request) => ok(await xp.deleteProgram(request.params.id))))
+    }
 
     if (scopeKind === 'SELL') {
       // Valuation settings + catalogue editing are one shared place, owned by the sell section.

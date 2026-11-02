@@ -15,8 +15,10 @@
  * @module modules/sell-requests/sell-requests.service
  */
 
+import { randomBytes } from 'node:crypto'
 import { getClient, query } from '../../config/database.js'
 import { notifySellEvent } from './sell-requests.notify.js'
+import { assertTypeExists, creditLimit } from './exchange-programs.service.js'
 import { DEFAULT_RULES, ValidationError, isValidImei, parseQa, valuate, variantBase } from './valuation.js'
 import { claimMedia, listMedia } from './evidence.service.js'
 import { assertQcAllowsApproval, assertQcAllowsCompletion, ensureQc, getQc } from './request-qc.service.js'
@@ -170,7 +172,7 @@ export async function updateSettings(actor, input) {
   return getSettingsForAdmin()
 }
 
-const serializeModel = (m) => ({
+export const serializeModel = (m) => ({
   id: m.id, name: m.name, category: m.category, variants: m.variants, colors: m.colors,
   basePrice: num(m.base_price), isActive: m.is_active,
   brand: m.brand || null, brandLogoUrl: m.brand_logo_url || null, imageUrl: m.image_url || null,
@@ -190,14 +192,14 @@ export async function publicSummary() {
   return { enabled: !!settings.enabled && rows[0].models > 0, maxValue: num(rows[0].max_value) ?? 0 }
 }
 
-function parseModelInput(input, base = {}) {
+async function parseModelInput(input, base = {}) {
   const name = String(input.name ?? base.name ?? '').trim()
   const category = input.category ?? base.category
   const variants = input.variants ?? base.variants
   const colors = input.colors ?? base.colors
   const basePrice = Number(input.basePrice ?? base.base_price)
   if (!name) throw new SellError('VALIDATION', 'Model name is required', 422)
-  if (!['Smartphone', 'Tablet', 'Laptop'].includes(category)) throw new SellError('VALIDATION', 'Invalid category', 422)
+  await assertTypeExists(category)
   const strs = (a) => Array.isArray(a) && a.length > 0 && a.every((x) => typeof x === 'string' && x.trim()) && new Set(a).size === a.length
   if (!strs(variants)) throw new SellError('VALIDATION', 'Variants must be a non-empty list of unique names', 422)
   if (!strs(colors)) throw new SellError('VALIDATION', 'Colors must be a non-empty list of unique names', 422)
@@ -210,7 +212,7 @@ function parseModelInput(input, base = {}) {
 }
 
 export async function createModel(input) {
-  const m = parseModelInput(input)
+  const m = await parseModelInput(input)
   try {
     const { rows } = await query(
       `INSERT INTO sell_device_models (name, category, variants, colors, base_price, brand, brand_logo_url, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
@@ -226,7 +228,7 @@ export async function createModel(input) {
 export async function updateModel(id, input) {
   const { rows: cur } = await query('SELECT * FROM sell_device_models WHERE id = $1', [id])
   if (!cur[0]) throw new SellError('NOT_FOUND', 'Model not found', 404)
-  const m = parseModelInput(input, cur[0])
+  const m = await parseModelInput(input, cur[0])
   try {
     const { rows } = await query(
       `UPDATE sell_device_models SET name=$2, category=$3, variants=$4, colors=$5, base_price=$6,
@@ -502,8 +504,16 @@ export async function createRequest(actor, input) {
       ? 'Exchanges are created from the Exchange section — use /exchange-requests'
       : 'Sell requests are created from the Sell section — use /sell-requests', 422)
   }
-  if (!isValidImei(input.imei)) throw new SellError('INVALID_IMEI', 'IMEI must be 15 digits and pass the checksum', 422)
-  await assertNotBlocked(input.imei)
+  // Phones and tablets are identified by a checked IMEI; other devices (headphones, watches…) by an optional serial.
+  const deviceModel = await resolveModel(input)
+  const { rows: typeRows } = await query('SELECT needs_imei FROM exchange_device_types WHERE key = $1', [deviceModel.category])
+  if (typeRows[0] ? typeRows[0].needs_imei : true) {
+    if (!isValidImei(input.imei)) throw new SellError('INVALID_IMEI', 'IMEI must be 15 digits and pass the checksum', 422)
+    await assertNotBlocked(input.imei)
+  } else {
+    const serial = String(input.imei ?? '').trim().replace(/[^A-Za-z0-9-]/g, '').slice(0, 32)
+    input = { ...input, imei: serial.length >= 3 ? serial : `NA-${randomBytes(6).toString('hex').toUpperCase()}` }
+  }
 
   let customer
   if (actor.kind === 'CUSTOMER') {
@@ -525,6 +535,8 @@ export async function createRequest(actor, input) {
     const price = Number(e.newProductPrice)
     if (!String(e.newProduct || '').trim() || !Number.isFinite(price) || price <= 0) throw new SellError('VALIDATION', 'Exchange needs the new product and its price', 422)
     exchangeIn = { newProduct: String(e.newProduct).trim().slice(0, 200), newProductPrice: price }
+    // When the app says which product it is (it always does), the old device must be one that product accepts.
+    if (e.productId) exchangeIn.creditLimit = await creditLimit(e.productId, deviceModel.category)
   }
 
   const description = String(input.description || '').slice(0, 1000)
@@ -543,8 +555,9 @@ export async function createRequest(actor, input) {
       if (input.type !== 'EXCHANGE' && input.expectedPrice != null && input.expectedPrice !== '' && expected < 100) {
         throw new SellError('VALIDATION', 'Please enter your price in rupees', 422)
       }
+      const credit = exchangeIn ? Math.min(q.value, exchangeIn.creditLimit ?? Infinity) : 0
       const exchange = exchangeIn
-        ? { ...exchangeIn, tradeInValue: q.value, payable: Math.max(0, exchangeIn.newProductPrice - q.value) }
+        ? { newProduct: exchangeIn.newProduct, newProductPrice: exchangeIn.newProductPrice, tradeInValue: credit, payable: Math.max(0, exchangeIn.newProductPrice - credit) }
         : null
 
       const { rows } = await client.query(
