@@ -11,9 +11,14 @@
 import { query, getClient } from '../../config/database.js'
 import { logger } from '../../config/logger.js'
 import { ShopProductsRepository } from '../shop-products/shop-products.repository.js'
+import { announceOrderStatusById } from '../orders/order-events.js'
 
 const shopProductsRepo = new ShopProductsRepository()
 const TERMINAL = new Set(['CANCELLED', 'DELIVERED', 'CLOSED', 'RETURNED'])
+
+// Parent-order ladder used to roll vendor confirm / pack up to the customer's order.
+const PARENT_RANK = { PENDING: 0, ORDER_PLACED: 0, CONFIRMED: 1, PREPARING: 1, PACKED: 2, READY_TO_SHIP: 2, SHIPPED: 3, OUT_FOR_DELIVERY: 4, DELIVERED: 5, COMPLETED: 6 }
+const SELLER_RANK = { ORDER_PLACED: 0, CONFIRMED: 1, PACKED: 2, READY_TO_SHIP: 2, SHIPPED: 3, OUT_FOR_DELIVERY: 4, DELIVERED: 5, CLOSED: 6 }
 
 const ALLOWED_STATUS = new Set([
   'ORDER_PLACED', 'CONFIRMED', 'PACKED', 'READY_TO_SHIP', 'SHIPPED',
@@ -213,7 +218,48 @@ export class SellerOrdersService {
         [id, fulfilmentMap[nextStatus]]
       )
     }
+    if (['CONFIRMED', 'PACKED', 'READY_TO_SHIP'].includes(nextStatus)) {
+      await this.rollUpParentFromSellers(current.order_id, actorId)
+    }
     return this.getById(id, vendorId)
+  }
+
+  /**
+   * Move the customer's parent order forward when every live vendor slice has been confirmed / packed,
+   * write the history rows the customer timeline reads, and tell the customer app live.
+   * Without this the customer only saw the order move once a shipment was created.
+   */
+  async rollUpParentFromSellers(orderId, actorId) {
+    if (!orderId) return
+    const steps = []
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const o = (await client.query(`SELECT status FROM orders WHERE id = $1 FOR UPDATE`, [orderId])).rows[0]
+      const parts = (await client.query(`SELECT status FROM seller_orders WHERE order_id = $1 AND status <> 'CANCELLED'`, [orderId])).rows
+      if (!o || !parts.length || ['CANCELLED', 'REFUNDED', 'RETURNED'].includes(o.status)) { await client.query('ROLLBACK'); return }
+      const minRank = Math.min(...parts.map((r) => SELLER_RANK[r.status] ?? 0))
+      const have = PARENT_RANK[o.status] ?? 0
+      let from = o.status
+      for (const [rank, status] of [[1, 'CONFIRMED'], [2, 'PACKED']]) {
+        if (minRank >= rank && have < rank) {
+          await client.query(`UPDATE orders SET status = $2, updated_at = NOW() WHERE id = $1`, [orderId, status])
+          await client.query(
+            `INSERT INTO order_status_history (order_id, from_status, to_status, changed_by, note) VALUES ($1,$2,$3,$4,'Updated by the seller')`,
+            [orderId, from, status, actorId || null])
+          steps.push(status)
+          from = status
+        }
+      }
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      logger.warn({ err: err.message, orderId }, 'Parent order roll-up after seller update failed (non-critical)')
+      return
+    } finally {
+      client.release()
+    }
+    for (const status of steps) await announceOrderStatusById(orderId, status)
   }
 
   /**

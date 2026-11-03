@@ -44,6 +44,10 @@ export function buildCustomerOrderEventNotification({
       title: '🛵 Rider accepted your order',
       body: `A delivery partner accepted order ${orderNumber}. Please wait a few minutes while they get ready.`,
     },
+    SHIPPED: {
+      title: '🚚 Order shipped',
+      body: `Order ${orderNumber} has been handed to the courier and is on its way.`,
+    },
     PICKED_UP: {
       title: '🚴 Out for delivery',
       body: `Order ${orderNumber} is on its way!${otpSuffix}`,

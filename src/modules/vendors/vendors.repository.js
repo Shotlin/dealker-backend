@@ -205,7 +205,59 @@ export class VendorsRepository {
       )
     }
 
+    // Customer "nearby" search reads shops.lat/lng, so a pin set on the profile must reach the vendor's shops too.
+    const { latitude, longitude } = profileData
+    if (typeof latitude === 'number' && typeof longitude === 'number'
+      && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
+      const text = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+      await query(
+        `UPDATE shops SET lat = $2, lng = $3,
+                address_line1 = COALESCE($4, address_line1), city = COALESCE($5, city),
+                state = COALESCE($6, state), pincode = COALESCE($7, pincode), updated_at = NOW()
+          WHERE vendor_id = $1 AND is_platform = false AND deleted_at IS NULL`,
+        [vendorId, latitude, longitude, text(profileData.address_line1), text(profileData.city),
+          text(profileData.state), text(profileData.pincode)]
+      )
+    }
+
     return this.findById(vendorId)
+  }
+
+  /**
+   * Called when an admin approves a vendor: makes sure the vendor has a live shop (customers' "nearby"
+   * and every listing hang off the shop). Creates it from the business profile the vendor filled in.
+   * Returns { ok: true } or { ok: false, message } when the profile is not complete enough yet.
+   */
+  async ensureShop(vendorId) {
+    const { rows: existing } = await query(
+      `SELECT id FROM shops WHERE vendor_id = $1 AND is_platform = false AND deleted_at IS NULL LIMIT 1`, [vendorId])
+    if (existing[0]) {
+      await query(`UPDATE shops SET is_active = true, is_verified = true, updated_at = NOW() WHERE id = $1`, [existing[0].id])
+      return { ok: true, shopId: existing[0].id }
+    }
+    const vendor = await this.findById(vendorId)
+    const p = vendor?.profile || {}
+    const missing = []
+    if (!String(p.address_line1 || '').trim()) missing.push('address')
+    if (!String(p.city || '').trim()) missing.push('city')
+    if (!String(p.state || '').trim()) missing.push('state')
+    if (!/^[1-9][0-9]{5}$/.test(String(p.pincode || '').trim())) missing.push('pincode')
+    if (p.latitude == null || p.longitude == null) missing.push('map location')
+    if (missing.length) {
+      return { ok: false, message: `Vendor has not completed their business profile yet (missing: ${missing.join(', ')}).` }
+    }
+    const base = String(vendor.slug || 'shop').slice(0, 60)
+    const suffix = Math.random().toString(16).slice(2, 8)
+    const { rows } = await query(
+      `INSERT INTO shops (name, slug, branch_code, phone, email, address_line1, address_line2, city, state, pincode,
+                          lat, lng, delivery_radius_km, is_active, is_verified, vendor_id, gst_number, pan_number)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,25,true,true,$13,$14,$15)
+       RETURNING id`,
+      [vendor.name, `${base}-${suffix}`, `V${suffix.toUpperCase()}`, vendor.phone, vendor.email,
+        p.address_line1, p.address_line2 || null, p.city, p.state, p.pincode, p.latitude, p.longitude,
+        vendorId, p.gstin || null, p.pan_number || null]
+    )
+    return { ok: true, shopId: rows[0].id }
   }
 
   /**

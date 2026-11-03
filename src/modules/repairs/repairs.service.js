@@ -16,6 +16,7 @@ import { logger } from '../../config/logger.js'
 import { advanceFor, canMove, computeQuote, GSTIN_RE, LINE_KINDS, money, settle, TABS, warrantyUntil } from './repairs.engine.js'
 import { claimRepairMedia, listRepairMedia } from './repairs.media.js'
 import { notifyRepair } from './repairs.notify.js'
+import { pingRepairVendors } from '../../utils/vendor-live.js'
 
 export class RepairError extends Error {
   constructor(code, message, statusCode = 400, details = {}) {
@@ -254,6 +255,7 @@ export async function createRequest(actor, input = {}) {
       logger.warn({ err: err.message, repairId: id }, 'automatic repair offers could not be generated')
     }
   }
+  if (marketplace) pingRepairVendors({ title: 'New repair request', body: 'A customer near you needs a repair quote.', data: { requestId: id } })
   return getManage(actor.kind === 'CUSTOMER' ? { kind: 'CUSTOMER', userId: actor.userId } : { kind: 'ADMIN' }, id)
 }
 

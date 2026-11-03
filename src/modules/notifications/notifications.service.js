@@ -138,7 +138,7 @@ export class NotificationsService {
       const tokens = await this.repository.getFcmTokens(userId, app)
       if (tokens.length > 0) {
         const tokenStrings = tokens.map(t => t.token)
-        const pushOptions = { title, body, data: { ...data, notificationId: notification.id } }
+        const pushOptions = { title, body, data: { ...data, type, notificationId: notification.id } }
         if (channelId) pushOptions.channelId = channelId
         if (sound) pushOptions.sound = sound
         for (const token of tokenStrings) {

@@ -255,15 +255,59 @@ async function resolveModel(input, client = null) {
   return rows[0]
 }
 
+const short = (v, n) => String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, n)
+
+/**
+ * The customer can sell a phone that is not in our list (typed model name, own storage / colour).
+ * `input.custom` = { brand, model, expectedPrice, storage:bool, colour:bool }. A typed model that already exists
+ * resolves to the listed one; an unknown one is valued from the price the customer expects (there is no catalogue price).
+ */
+async function resolveModelOrCustom(input, client = null) {
+  const c = input.custom && typeof input.custom === 'object' ? input.custom : null
+  if (!c) return { model: await resolveModel(input, client), custom: null }
+  const run = client ? client.query.bind(client) : query
+  const name = short(c.model, 80)
+  if (name && !input.modelId) {
+    const { rows } = await run(`SELECT * FROM sell_device_models WHERE is_active = TRUE AND lower(name) = lower($1) LIMIT 1`, [short(`${c.brand || ''} ${name}`, 120)])
+    const { rows: byName } = rows[0] ? { rows } : await run(`SELECT * FROM sell_device_models WHERE is_active = TRUE AND lower(name) = lower($1) LIMIT 1`, [name])
+    if (byName[0]) return { model: byName[0], custom: { storage: !!c.storage, colour: !!c.colour } }
+    const price = Number(c.expectedPrice)
+    if (!Number.isFinite(price) || price < 1000 || price > 500000) {
+      throw new SellError('VALIDATION', 'Enter the price you expect for this phone (₹1,000 to ₹5,00,000)', 422)
+    }
+    const variant = short(input.variant, 30)
+    const color = short(input.color, 30)
+    if (!variant || !color) throw new SellError('VALIDATION', 'Enter the storage and colour of your phone', 422)
+    const brand = short(c.brand, 40)
+    return {
+      model: { id: null, name: short(brand && !name.toLowerCase().startsWith(brand.toLowerCase()) ? `${brand} ${name}` : name, 120), category: 'Smartphone',
+        variants: [variant], colors: [color], base_price: price, brand, custom: true },
+      custom: { storage: false, colour: false, model: true },
+    }
+  }
+  return { model: await resolveModel(input, client), custom: { storage: !!c.storage, colour: !!c.colour } }
+}
+
 /** Quote without persisting — used by the customer app before submitting. */
 export async function quote(input, client = null) {
   try {
     const settings = await getSettings(client)
     if (!settings.enabled) throw new SellError('DISABLED', 'Selling is currently disabled', 403)
-    const model = await resolveModel(input, client)
-    if (!model.colors.includes(input.color)) throw new SellError('VALIDATION', 'Unknown colour for this model', 422)
+    const { model, custom } = await resolveModelOrCustom(input, client)
+    const typedColour = !!custom?.colour || !!custom?.model
+    if (typedColour) {
+      if (!short(input.color, 30)) throw new SellError('VALIDATION', 'Enter the colour of your phone', 422)
+    } else if (!model.colors.includes(input.color)) {
+      throw new SellError('VALIDATION', 'Unknown colour for this model', 422)
+    }
     const qa = parseQa(input.qa)
-    const base = variantBase(model.base_price, model.variants, input.variant, num(settings.variant_step_pct))
+    let base
+    if (model.custom) base = Math.round(Number(model.base_price))
+    else if (custom?.storage && !model.variants.includes(input.variant)) {
+      if (!short(input.variant, 30)) throw new SellError('VALIDATION', 'Enter the storage of your phone', 422)
+      // unlisted storage: value it like the smallest listed one (the cautious end), the customer still sets the price
+      base = variantBase(model.base_price, model.variants, model.variants[0], num(settings.variant_step_pct))
+    } else base = variantBase(model.base_price, model.variants, input.variant, num(settings.variant_step_pct))
     const v = valuate(base, qa, settings.rules, num(settings.max_total_deduction_pct))
     return { model, qa, base, settings, ...v }
   } catch (err) {
@@ -567,7 +611,7 @@ export async function createRequest(actor, input) {
          VALUES ('${section.prefix}-' || nextval('${section.seq}'), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
          RETURNING *`,
         [input.type, customer.userId, customer.name, customer.phone, customer.email, customer.city, actor.userId, actor.kind,
-          q.model.id, q.model.name, input.variant, input.color, q.model.category, input.imei, q.qa, q.condition, q.base,
+          q.model.id, q.model.name, short(input.variant, 30), short(input.color, 30), q.model.category, input.imei, q.qa, q.condition, q.base,
           q.value, JSON.stringify(q.deductions), expected, description, JSON.stringify(images), exchange ? JSON.stringify(exchange) : null]
       )
       await addEvent(client, rows[0].id, 'SUBMITTED', input.type === 'EXCHANGE' ? 'Exchange Submitted' : 'Request Submitted', actor)
@@ -810,7 +854,7 @@ export const placeOffer = (actor, id, input) => { let fresh = null; return tx(as
     await addEvent(client, id, 'QUOTE_RECEIVED', 'Quote Received', actor, { vendorId: actor.vendorId })
     fresh = amount
   }
-}).then(() => { if (fresh != null) notifySellEvent('OFFER_RECEIVED', id, { amount: fresh }); return getManage(actor, id) }) }
+}).then(() => { if (fresh != null) notifySellEvent('OFFER_RECEIVED', id, { amount: fresh, vendorId: actor.vendorId }); return getManage(actor, id) }) }
 
 export const withdrawOffer = (actor, id) => tx(async (client) => {
   const r = await lock(client, id, actor)

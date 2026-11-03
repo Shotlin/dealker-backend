@@ -123,6 +123,12 @@ export function notifySellEvent(kind, requestId, extra = {}) {
       const r = rows[0]
       if (!r) return
       const data = { event: `${r.kind === 'EXCHANGE' ? 'exchange_request' : 'sell_request'}:${kind.toLowerCase()}`, kind: r.kind, requestId: r.id, code: r.code, status: r.status }
+      // Where tapping the notification should land: the buyer's chat for messages, the offers list for offers.
+      if (r.kind === 'SELL') {
+        if (kind === 'MESSAGE_FROM_VENDOR' && extra.vendorId) { data.vendorId = extra.vendorId; data.deepLink = `/sell/${r.id}/chat/${extra.vendorId}` }
+        else if (kind === 'OFFER_RECEIVED') { if (extra.vendorId) data.vendorId = extra.vendorId; data.deepLink = `/sell/${r.id}/offers` }
+        else if (kind === 'MESSAGE_FROM_CUSTOMER') data.vendorId = extra.vendorId
+      }
 
       if (copy.c && r.user_id && !extra.skipCustomer) {
         await send([r.user_id], 'customer', { ...forType(r, copy.c(r, extra)), data })

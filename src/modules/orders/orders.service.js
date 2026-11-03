@@ -8,6 +8,7 @@
 import crypto from 'node:crypto'
 import { logger } from '../../config/logger.js'
 import { publishOrderStatus } from './order-events.js'
+import { pingVendors } from '../../utils/vendor-live.js'
 import { getClient } from '../../config/database.js'
 import { CartRepository } from '../cart/cart.repository.js'
 import { CartService } from '../cart/cart.service.js'
@@ -462,6 +463,18 @@ export class OrdersService {
       } catch (err) {
         logger.warn({ err: err.message }, 'Dashboard new-order socket emit failed (non-critical)')
       }
+    }
+
+    // Tell the vendors' apps right away (live refresh; push only once the order is genuinely confirmed).
+    {
+      const confirmed = created[0].paymentMethod === 'COD' || created[0].paymentStatus === 'PAID'
+      pingVendors(sellerOrders.map((so) => so.vendor_id), {
+        kind: 'order',
+        title: confirmed ? 'New order received' : undefined,
+        body: confirmed ? `Order ${created[0].orderNumber} is waiting for you — accept it to start packing.` : undefined,
+        data: { orderId: created[0].id },
+        push: confirmed,
+      })
     }
 
     logger.info({ customerId, orderId: created[0]?.id, sellerOrders: sellerOrders.length }, 'Marketplace checkout completed')

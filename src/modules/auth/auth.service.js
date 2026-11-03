@@ -140,6 +140,33 @@ export class AuthService {
   }
 
   /**
+   * Fresh vendor-scoped session for a user who just became a vendor member (self-registration),
+   * so the app does not have to log out and in again. Same token shape as the vendor branch of verifyOtp.
+   */
+  async issueVendorSession(user) {
+    const memberships = await this.repo.findActiveVendorUsersByUserId(user.id)
+    const vendorRoles = [...new Set(memberships.map((m) => m.role))]
+    const permissionSet = new Set()
+    for (const r of vendorRoles) for (const perm of ROLE_PERMISSIONS[r] ?? []) permissionSet.add(perm)
+    const permissions = [...permissionSet]
+    const vendorId = memberships.length === 1 ? memberships[0].vendor_id : null
+    const accessToken = signAccessToken(
+      { id: user.id, phone: user.phone, role: user.role, vendorId, vendorRoles, permissions },
+      { expiresIn: '24h' }
+    )
+    const refreshToken = signRefreshToken({ id: user.id, phone: user.phone, role: user.role })
+    await redis.set(refreshKeyFor(user.id, user.role), refreshToken, 'EX', 7 * 24 * 60 * 60)
+    return {
+      accessToken,
+      refreshToken,
+      user: {
+        id: user.id, phone: user.phone, name: user.name, role: user.role, isNewUser: false,
+        isVerified: false, vendor_id: vendorId, vendor_roles: vendorRoles, permissions,
+      },
+    }
+  }
+
+  /**
    * Verify OTP and return JWT tokens
    * Tries 2Factor.in verification first, then falls back to local Redis OTP
    */

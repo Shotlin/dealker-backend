@@ -50,7 +50,7 @@ export function nextAction(row) {
     }[s] || null
   }
   const payable = String(row.payment_status).toUpperCase() === 'PAID' || String(row.payment_method).toUpperCase() === 'COD'
-  if (s === 'ORDER_PLACED') return payable ? { key: 'confirm', label: 'Confirm order' } : null
+  if (s === 'ORDER_PLACED') return payable ? { key: 'confirm', label: 'Accept order' } : null
   if (s === 'CONFIRMED') return { key: 'pack', label: 'Mark as packed' }
   if (s === 'PACKED' || s === 'READY_TO_SHIP') return { key: 'ship', label: 'Ship it' }
   return null

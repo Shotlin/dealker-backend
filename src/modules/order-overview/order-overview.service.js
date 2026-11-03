@@ -2,6 +2,8 @@ import { query, getClient } from '../../config/database.js'
 import { VendorSettlementsService } from '../vendor-settlements/vendor-settlements.service.js'
 import { ShippingService } from '../shipping/shipping.service.js'
 import { payoutBlocks } from './order-payout.service.js'
+import { announceOrderStatusById } from '../orders/order-events.js'
+import { SellerOrdersService } from '../seller-orders/seller-orders.service.js'
 
 const err = (statusCode, message, code = 'ORDER_ERROR') => Object.assign(new Error(message), { statusCode, code })
 const n = (x) => (x == null ? 0 : Number(x))
@@ -190,11 +192,12 @@ const shipping = new ShippingService()
 async function rollUpParent(client, orderId, actorId) {
   const o = (await client.query(`SELECT status, payment_method FROM orders WHERE id = $1 FOR UPDATE`, [orderId])).rows[0]
   const parts = (await client.query(`SELECT status FROM seller_orders WHERE order_id = $1 AND status <> 'CANCELLED'`, [orderId])).rows.map((r) => r.status)
-  if (!parts.length || ['CANCELLED', 'REFUNDED'].includes(o.status)) return
+  if (!parts.length || ['CANCELLED', 'REFUNDED'].includes(o.status)) return null
   let next = o.status
   if (parts.every((x) => x === 'DELIVERED')) next = 'DELIVERED'
-  else if (parts.some((x) => ['SHIPPED', 'OUT_FOR_DELIVERY'].includes(x)) && o.status !== 'DELIVERED') next = 'OUT_FOR_DELIVERY'
-  if (next === o.status) return
+  else if (parts.some((x) => x === 'OUT_FOR_DELIVERY') && o.status !== 'DELIVERED') next = 'OUT_FOR_DELIVERY'
+  else if (parts.some((x) => x === 'SHIPPED') && !['DELIVERED', 'OUT_FOR_DELIVERY'].includes(o.status)) next = 'SHIPPED'
+  if (next === o.status) return null
   await client.query(
     `UPDATE orders SET status = $2, updated_at = NOW(),
             delivered_at = CASE WHEN $2 = 'DELIVERED' THEN NOW() ELSE delivered_at END,
@@ -203,13 +206,14 @@ async function rollUpParent(client, orderId, actorId) {
             amount_due = CASE WHEN $2 = 'DELIVERED' AND payment_status <> 'PAID' THEN 0 ELSE amount_due END
       WHERE id = $1`, [orderId, next])
   await client.query(`INSERT INTO order_status_history (order_id, from_status, to_status, changed_by, note) VALUES ($1,$2,$3,$4,'Updated from shipment tracking')`, [orderId, o.status, next, actorId])
+  return next
 }
 
 export const shipmentTracking = {
   async addEvent(shipmentId, { status, note, location }, actorId) {
     if (!TRACK_STATUSES.includes(status)) throw err(400, 'Unknown tracking status', 'VALIDATION_ERROR')
     const client = await getClient()
-    let soId = null; let delivered = false
+    let soId = null; let delivered = false; let parentNext = null
     try {
       await client.query('BEGIN')
       const sh = (await client.query(`SELECT * FROM shipments WHERE id = $1 FOR UPDATE`, [shipmentId])).rows[0]
@@ -228,12 +232,13 @@ export const shipmentTracking = {
                   delivered_at = CASE WHEN $2 = 'DELIVERED' THEN NOW() ELSE delivered_at END WHERE id = $1`,
           [soId, next, next === 'DELIVERED' ? 'DELIVERED' : 'DISPATCHED'])
         delivered = next === 'DELIVERED'
-        await rollUpParent(client, so.order_id, actorId)
+        parentNext = await rollUpParent(client, so.order_id, actorId)
       }
       await client.query('COMMIT')
     } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e } finally { client.release() }
     if (delivered) await settlements.postSellerOrderEntries(soId).catch(() => {})
     const so = (await query(`SELECT order_id FROM seller_orders WHERE id = $1`, [soId])).rows[0]
+    if (parentNext) await announceOrderStatusById(so.order_id, parentNext)
     return orderOverview.get(so.order_id)
   },
 
@@ -260,6 +265,8 @@ export const shipmentTracking = {
       await client.query(`UPDATE seller_orders SET shipment_id = $2, shipping_provider = $3, status = CASE WHEN status IN ('ORDER_PLACED','CONFIRMED') THEN 'PACKED' ELSE status END, fulfilment_status = CASE WHEN status IN ('ORDER_PLACED','CONFIRMED') THEN 'PACKED' ELSE fulfilment_status END, updated_at = NOW() WHERE id = $1`, [sellerOrderId, sh.id, provider])
       await client.query('COMMIT')
     } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e } finally { client.release() }
+    // the parcel just went to PACKED: bring the customer's order (and its history) up to date
+    await new SellerOrdersService().rollUpParentFromSellers(orderId, actorId).catch(() => {})
     return orderOverview.get(orderId)
   },
 

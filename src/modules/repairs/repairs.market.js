@@ -18,6 +18,7 @@ import { logger } from '../../config/logger.js'
 import { haversineKm } from '../../utils/distance.js'
 import { advanceFor, computeQuote, money, TABS } from './repairs.engine.js'
 import { notifyRepair } from './repairs.notify.js'
+import { pingVendors } from '../../utils/vendor-live.js'
 import {
   CATEGORIES, PROBLEMS, RepairError, addEvent, getManage, getSettings, lock, moveTo, num, patch, text, tx,
 } from './repairs.service.js'
@@ -917,6 +918,7 @@ export async function sendMessage(actor, requestId, input = {}) {
   const { rows: c } = await query('SELECT COUNT(*)::int AS n FROM repair_messages WHERE request_id = $1', [requestId])
   if (c[0].n >= 500) throw new RepairError('RATE_LIMITED', 'This chat is full', 429)
   const { rows } = await query(`INSERT INTO repair_messages (request_id, sender_role, sender_id, body) VALUES ($1,$2,$3,$4) RETURNING *`, [requestId, role, actor.userId, body])
+  if (role === 'CUSTOMER' && request.serviceCenterId) pingVendors([request.serviceCenterId], { kind: 'chat', title: 'New repair message', body: body.slice(0, 80), data: { requestId }, push: true })
   return msgView(rows[0], role)
 }
 

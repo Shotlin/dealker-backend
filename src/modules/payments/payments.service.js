@@ -5,7 +5,8 @@ import * as sellRazorpay from '../sell-requests/sell-razorpay.service.js'
 import { b2b } from '../b2b/b2b.service.js'
 import { razorpay, getRazorpayKeyId, getRazorpayKeySecret, getRazorpayWebhookSecret } from '../../config/razorpay.js'
 import { orderQueue } from '../../config/bullmq.js'
-import { getClient } from '../../config/database.js'
+import { getClient, query } from '../../config/database.js'
+import { pingVendors } from '../../utils/vendor-live.js'
 import { getOffsetLimit, buildPagination } from '../../utils/paginate.js'
 import { OrdersRepository } from '../orders/orders.repository.js'
 import { PaymentSettingsService } from '../payment-settings/payment-settings.service.js'
@@ -393,6 +394,16 @@ export class PaymentsService {
 
     await this._settleWalletIfPending(order.id)
     await this._queueAutoAssign(order.id, source)
+
+    // New paid order -> the vendors' apps should show it immediately.
+    try {
+      const { rows: sos } = await query(`SELECT vendor_id FROM seller_orders WHERE order_id = $1`, [order.id])
+      pingVendors(sos.map((r) => r.vendor_id), {
+        kind: 'order', title: 'New order received',
+        body: `Order ${order.order_number || ''} is paid and waiting — accept it to start packing.`.replace('  ', ' '),
+        data: { orderId: order.id }, push: true,
+      })
+    } catch (_) { /* live ping is best-effort */ }
 
     if (outcome.wasRecoveredFromFailed) {
       try {
