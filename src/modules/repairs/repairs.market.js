@@ -599,7 +599,8 @@ export const markOutForDelivery = (actor, id, { courier, trackingUrl, note } = {
 export const confirmPrice = (actor, id) => tx(async (client) => {
   if (actor.kind === 'CUSTOMER') throw new RepairError('FORBIDDEN', 'Only repair staff can do this', 403)
   const r = await lock(client, id, actor)
-  if (r.status !== 'INSPECTION' || !r.selected_offer_id) throw new RepairError('INVALID_STATE', 'There is no agreed offer price to confirm at this stage', 409)
+  if (r.status !== 'INSPECTION') throw new RepairError('INVALID_STATE', 'The price can be confirmed once the device is received for inspection', 409)
+  if (!r.selected_offer_id) throw new RepairError('NO_AGREED_PRICE', 'No repair price has been set for this job yet. Ask Dealker support to set the price from the dashboard.', 409)
   const { rows: o } = await client.query('SELECT * FROM repair_offers WHERE id = $1', [r.selected_offer_id])
   const offer = o[0]
   if (!offer) throw new RepairError('NOT_FOUND', 'Offer not found', 404)

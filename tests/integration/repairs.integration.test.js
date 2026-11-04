@@ -341,6 +341,30 @@ d('repairs', () => {
       expect(ok.data).toMatchObject({ channel: 'B2B', deviceCount: 25, business: { name: 'Acme Retail Pvt Ltd', poReference: 'PO-77' } })
     })
 
+    it('dashboard-assigned repair: the agreed price lets the shop confirm after inspection; without one it gets a clear error', async () => {
+      const noPrice = (await call('POST', C, T.cust, b2c())).data.id
+      await call('POST', `${M}/${noPrice}/accept`, T.admin, { vendorId: T.vendA.vendorId })
+      await call('POST', `${M}/${noPrice}/receive`, T.vendA)
+      const miss = await call('POST', `${M}/${noPrice}/confirm-price`, T.vendA)
+      expect(miss.status).toBe(409)
+      expect(miss.body.code).toBe('NO_AGREED_PRICE')
+      // staff can still set the price afterwards, by assigning the shop again with a price
+      expect((await call('POST', `${M}/${noPrice}/assign`, T.admin, { vendorId: T.vendA.vendorId, price: 2360 })).status).toBe(200)
+      const late = await call('POST', `${M}/${noPrice}/confirm-price`, T.vendA)
+      expect(late.status, JSON.stringify(late.body)).toBe(200)
+      expect(late.data).toMatchObject({ status: 'ESTIMATE_APPROVED', money: { approvedTotal: 2360 } })
+
+      const id = (await call('POST', C, T.other, b2c())).data.id
+      const acc = await call('POST', `${M}/${id}/accept`, T.admin, { vendorId: T.vendA.vendorId, price: 1180 })
+      expect(acc.status, JSON.stringify(acc.body)).toBe(200)
+      expect(acc.data.selectedOfferId).toBeTruthy()
+      await call('POST', `${M}/${id}/receive`, T.vendA)
+      const ok = await call('POST', `${M}/${id}/confirm-price`, T.vendA)
+      expect(ok.status, JSON.stringify(ok.body)).toBe(200)
+      expect(ok.data).toMatchObject({ status: 'ESTIMATE_APPROVED', money: { approvedTotal: 1180 } })
+      expect((await call('POST', `${M}/${(await call('POST', C, T.cust, b2c())).data.id}/accept`, T.admin, { vendorId: T.vendA.vendorId, price: -5 })).status).toBe(422)
+    })
+
     it('one live repair per physical device', async () => {
       const serial = imei()
       expect((await call('POST', C, T.cust, b2c({ items: [device({ imeiSerial: serial })] }))).status).toBe(201)

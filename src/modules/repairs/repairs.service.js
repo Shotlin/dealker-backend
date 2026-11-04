@@ -441,7 +441,34 @@ async function checkVendor(client, vendorId, technicianId) {
   return { vendor: rows[0], tech }
 }
 
-export const accept = (actor, id, { vendorId, technicianId } = {}) => tx(async (client) => {
+/**
+ * Dashboard-assigned repairs have no customer-chosen quote, so the price staff agree with the customer while assigning the
+ * shop is stored as the selected offer. The shop later confirms it after inspection, exactly like a marketplace offer.
+ * `amount` is the final total the customer pays (tax included).
+ */
+async function recordAgreedPrice(client, r, vendorId, amount, actor, note) {
+  const total = Number(amount)
+  if (!Number.isFinite(total) || total <= 0 || total > 10_000_000 || Math.abs(Math.round(total * 100) / 100 - total) > 1e-9) {
+    throw new RepairError('VALIDATION', 'Enter the agreed repair price (₹, up to 2 decimals)', 422)
+  }
+  const s = await getSettings(client)
+  const taxPct = Number(s.tax_pct) || 0
+  const subtotal = Math.round((total / (1 + taxPct / 100)) * 100) / 100
+  const tax = Math.round((total - subtotal) * 100) / 100
+  const { rows: items } = await client.query('SELECT id FROM repair_items WHERE request_id = $1 ORDER BY line_no', [r.id])
+  const lines = [{ itemId: items.length === 1 ? items[0].id : null, kind: 'LABOUR', description: 'Repair — price agreed with the customer', qty: 1, unitPrice: subtotal }]
+  const { rows: o } = await client.query(
+    `INSERT INTO repair_offers (request_id, vendor_id, source, status, lines, subtotal, tax_pct, tax_amount, total, warranty_days, note, valid_until, created_by)
+     VALUES ($1,$2,'MANUAL','SELECTED',$3,$4,$5,$6,$7,$8,$9, NOW() + ($10 || ' days')::interval, $11)
+     ON CONFLICT (request_id, vendor_id) DO UPDATE SET status = 'SELECTED', lines = EXCLUDED.lines, subtotal = EXCLUDED.subtotal, tax_pct = EXCLUDED.tax_pct,
+       tax_amount = EXCLUDED.tax_amount, total = EXCLUDED.total, note = EXCLUDED.note, valid_until = EXCLUDED.valid_until, updated_at = NOW()
+     RETURNING id`,
+    [r.id, vendorId, JSON.stringify(lines), subtotal, taxPct, tax, total, s.default_warranty_days ?? 90, text(note, 500) || null, String(s.estimate_validity_days ?? 7), actor.userId])
+  await client.query(`UPDATE repair_offers SET status = 'NOT_SELECTED', updated_at = NOW() WHERE request_id = $1 AND id <> $2 AND status = 'OPEN'`, [r.id, o[0].id])
+  return { offerId: o[0].id, total }
+}
+
+export const accept = (actor, id, { vendorId, technicianId, price, priceNote } = {}) => tx(async (client) => {
   platformOnly(actor)
   const r = await lock(client, id, actor)
   const cols = {}
@@ -450,6 +477,11 @@ export const accept = (actor, id, { vendorId, technicianId } = {}) => tx(async (
     const { vendor, tech } = await checkVendor(client, vendorId, technicianId)
     Object.assign(cols, { assigned_vendor_id: vendor.id, technician_id: tech?.id ?? null, technician_name: tech?.name ?? null })
     label += ` — assigned to ${vendor.name}`
+    if (price != null && price !== '') {
+      const a = await recordAgreedPrice(client, r, vendor.id, price, actor, priceNote)
+      cols.selected_offer_id = a.offerId
+      label += ` · ₹${a.total}`
+    }
   }
   await moveTo(client, r, 'ACCEPTED', actor, label, cols)
 }).then(() => { notifyRepair('ACCEPTED', id); return getManage(actor, id) })
@@ -463,13 +495,21 @@ export const reject = (actor, id, reason) => tx(async (client) => {
   return note
 }).then((note) => { notifyRepair('REJECTED', id, { reason: note }); return getManage(actor, id) })
 
-export const assign = (actor, id, { vendorId, technicianId }) => tx(async (client) => {
+export const assign = (actor, id, { vendorId, technicianId, price, priceNote }) => tx(async (client) => {
   platformOnly(actor)
   const r = await lock(client, id, actor)
   if (['REJECTED', 'CANCELLED', 'COMPLETED'].includes(r.status)) throw new RepairError('INVALID_STATE', 'This repair is closed', 409)
   const { vendor, tech } = await checkVendor(client, vendorId, technicianId)
-  await patch(client, id, { assigned_vendor_id: vendor.id, technician_id: tech?.id ?? null, technician_name: tech?.name ?? null })
-  await addEvent(client, id, 'ASSIGNED', `Assigned to ${vendor.name}${tech ? ` · ${tech.name}` : ''}`, actor, { meta: { vendorId: vendor.id, technicianId: tech?.id } })
+  const cols = { assigned_vendor_id: vendor.id, technician_id: tech?.id ?? null, technician_name: tech?.name ?? null }
+  let agreed = ''
+  if (price != null && price !== '') {
+    if (r.status === 'IN_REPAIR' || r.status === 'ESTIMATE_APPROVED') throw new RepairError('INVALID_STATE', 'The price can only be set before the repair starts', 409)
+    const a = await recordAgreedPrice(client, r, vendor.id, price, actor, priceNote)
+    cols.selected_offer_id = a.offerId
+    agreed = ` · ₹${a.total}`
+  }
+  await patch(client, id, cols)
+  await addEvent(client, id, 'ASSIGNED', `Assigned to ${vendor.name}${tech ? ` · ${tech.name}` : ''}${agreed}`, actor, { meta: { vendorId: vendor.id, technicianId: tech?.id } })
 }).then(() => getManage(actor, id))
 
 export const cancel = (actor, id, reason) => tx(async (client) => {
