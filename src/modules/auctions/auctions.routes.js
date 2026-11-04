@@ -15,6 +15,7 @@ import { AuctionError, getSettings } from './auction.shared.js'
 import * as bidding from './auction-bidding.service.js'
 import * as admin from './auction-admin.service.js'
 import { checkout } from './auction-checkout.service.js'
+import * as chat from './auction-chat.service.js'
 
 const idParams = {
   type: 'object',
@@ -107,6 +108,14 @@ export async function auctionsRoutes(fastify) {
     success: true, data: await bidding.unwatch(request.user.id, request.params.id),
   })))
 
+  // Chat with the seller once you have won the lot
+  fastify.get('/:id/chat', { preHandler: auth, schema: { params: idParams } }, wrap(async (request) => ({
+    success: true, data: await chat.listChat({ kind: 'BUYER', userId: request.user.id }, request.params.id),
+  })))
+  fastify.post('/:id/chat', { preHandler: auth, schema: { params: idParams } }, wrap(async (request, reply) => reply.code(201).send({
+    success: true, data: await chat.sendChat({ kind: 'BUYER', userId: request.user.id }, request.params.id, request.body || {}),
+  })))
+
   fastify.post('/:id/checkout', {
     preHandler: auth,
     schema: { params: idParams, body: { type: 'object', properties: {
@@ -195,6 +204,20 @@ export async function auctionManageRoutes(fastify) {
     const { audience = '', status = '', q = '', page = 1, limit = 20 } = request.query || {}
     return admin.listOrders(actorOf(request), { audience: String(audience).toUpperCase(), status: String(status), q: String(q).slice(0, 100), page: Math.max(1, Number(page)), limit: Math.min(100, Number(limit) || 20) })
   }))
+  // Seller ↔ winning buyer chat (vendors only; admin-owned auctions have no seller)
+  const sellerOnly = async (request, reply) => {
+    if (isPlatformUser(request.user) || !request.vendorId) return reply.code(403).send({ success: false, code: 'FORBIDDEN', message: 'Only the selling vendor can chat with the buyer' })
+  }
+  fastify.get('/:id/chat', { preHandler: pre(sellerOnly), schema: params }, wrap(async (request) => ({
+    success: true, data: await chat.listChat(actorOf(request), request.params.id),
+  })))
+  fastify.post('/:id/chat', { preHandler: pre(sellerOnly), schema: params }, wrap(async (request, reply) => reply.code(201).send({
+    success: true, data: await chat.sendChat(actorOf(request), request.params.id, request.body || {}),
+  })))
+  fastify.get('/:id/chat/unread', { preHandler: pre(sellerOnly), schema: params }, wrap(async (request) => ({
+    success: true, data: { unread: await chat.unreadChat(actorOf(request), request.params.id) },
+  })))
+
   fastify.get('/:id', { preHandler: pre(guard('auctions.view')), schema: params }, wrap(async (request) => ({
     success: true, data: await admin.getManage(actorOf(request), request.params.id),
   })))

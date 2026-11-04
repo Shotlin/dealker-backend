@@ -365,6 +365,16 @@ d('repairs', () => {
       expect((await call('POST', `${M}/${(await call('POST', C, T.cust, b2c())).data.id}/accept`, T.admin, { vendorId: T.vendA.vendorId, price: -5 })).status).toBe(422)
     })
 
+    it('an assigned shop gets price suggestions from its own list for the job; other shops cannot', async () => {
+      const id = (await call('POST', C, T.cust, b2c())).data.id
+      await call('POST', `${M}/${id}/accept`, T.admin, { vendorId: T.vendA.vendorId })
+      const mine = await call('GET', `${M}/${id}/suggested-quote`, T.vendA)
+      expect(mine.status, JSON.stringify(mine.body)).toBe(200)
+      expect(Array.isArray(mine.data.missing) || Array.isArray(mine.data.lines)).toBe(true)
+      expect((await call('GET', `${M}/${id}/suggested-quote`, T.vendB)).status).toBe(404)
+      expect((await call('GET', `${M}/${id}/suggested-quote`, T.admin)).status).toBe(403)
+    })
+
     it('one live repair per physical device', async () => {
       const serial = imei()
       expect((await call('POST', C, T.cust, b2c({ items: [device({ imeiSerial: serial })] }))).status).toBe(201)

@@ -726,11 +726,8 @@ export async function setProfile(actor, input = {}) {
   return getProfile(actor, vendorId)
 }
 
-/** Quote lines the vendor's own price list gives for this request; issues it has no price for come back in `missing`. */
-export async function suggestedQuote(actor, requestId, vendorIdIn) {
-  const vendorId = ownerVendor(actor, vendorIdIn)
-  const { rows } = await query(`SELECT * FROM repair_requests WHERE id = $1 AND flow = 'MARKETPLACE' AND status = 'REQUESTED'`, [requestId])
-  if (!rows[0] || !(await vendorCanSee(vendorId, rows[0]))) throw new RepairError('NOT_FOUND', 'Repair request not found', 404)
+/** Lines from one vendor's own price list for these devices; issues it has no price for come back in `missing`. */
+async function suggestFor(vendorId, requestId) {
   const [{ rows: items }, { rows: services }] = await Promise.all([
     query('SELECT * FROM repair_items WHERE request_id = $1 ORDER BY line_no', [requestId]),
     query('SELECT * FROM repair_vendor_services WHERE vendor_id = $1 AND is_active', [vendorId]),
@@ -750,7 +747,26 @@ export async function suggestedQuote(actor, requestId, vendorIdIn) {
   }
   const s = await getSettings()
   const q = lines.length ? computeQuote({ lines, discountPct: 0, taxPct: Number(s.tax_pct) }) : null
-  return { lines, missing, estDaysMin: daysMin, estDaysMax: daysMax, warrantyDays: Number.isFinite(warranty) ? warranty : null, totals: q && { subtotal: q.subtotal, taxPct: q.taxPct, taxAmount: q.taxAmount, total: q.total } }
+  return { lines, missing, estDaysMin: daysMin, estDaysMax: daysMax, warrantyDays: Number.isFinite(warranty) ? warranty : null, taxPct: Number(s.tax_pct), totals: q && { subtotal: q.subtotal, taxPct: q.taxPct, taxAmount: q.taxAmount, total: q.total } }
+}
+
+/** Quote lines the vendor's own price list gives for this request; issues it has no price for come back in `missing`. */
+export async function suggestedQuote(actor, requestId, vendorIdIn) {
+  const vendorId = ownerVendor(actor, vendorIdIn)
+  const { rows } = await query(`SELECT * FROM repair_requests WHERE id = $1 AND flow = 'MARKETPLACE' AND status = 'REQUESTED'`, [requestId])
+  if (!rows[0] || !(await vendorCanSee(vendorId, rows[0]))) throw new RepairError('NOT_FOUND', 'Repair request not found', 404)
+  return suggestFor(vendorId, requestId)
+}
+
+/**
+ * Same suggestion for a job that is already the shop's (assigned from the dashboard, or won in the marketplace):
+ * the shop prices the repair from its own price list and adds a custom price where it has none.
+ */
+export async function jobSuggestedQuote(actor, id) {
+  if (actor.kind !== 'VENDOR') throw new RepairError('FORBIDDEN', 'Only the service centre prices its own jobs', 403)
+  const { rows } = await query('SELECT id, assigned_vendor_id, status FROM repair_requests WHERE id = $1', [id])
+  if (!rows[0] || rows[0].assigned_vendor_id !== actor.vendorId) throw new RepairError('NOT_FOUND', 'Repair not found', 404)
+  return suggestFor(actor.vendorId, id)
 }
 
 const UPDATE_STAGES = ['RECEIVED', 'DIAGNOSING', 'WAITING_FOR_PARTS', 'REPAIR_IN_PROGRESS', 'TESTING', 'OTHER']

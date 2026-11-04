@@ -184,6 +184,7 @@ export async function repairsManageRoutes(fastify) {
   fastify.put('/:id/technician', { preHandler: pre(doStaff), schema: { params: idParams } }, wrap(async (request) => ok(await market.setTechnician(actorOf(request), request.params.id, request.body || {}))))
   fastify.get('/:id/messages', { preHandler: pre(view), schema: { params: idParams } }, wrap(async (request) => ok(await market.listMessages(actorOf(request), request.params.id))))
   fastify.post('/:id/messages', { preHandler: pre(doStaff), schema: { params: idParams } }, wrap(async (request, reply) => reply.code(201).send(ok(await market.sendMessage(actorOf(request), request.params.id, request.body || {})))))
+  fastify.get('/:id/suggested-quote', { preHandler: pre(view), schema: { params: idParams } }, wrap(async (request) => ok(await market.jobSuggestedQuote(actorOf(request), request.params.id))))
   act('confirm-price', doStaff, (a, id) => market.confirmPrice(a, id))
   act('generate-offers', doPlatform, async (a, id) => { await market.generateOffers(id); return svc.getManage(a, id) })
 

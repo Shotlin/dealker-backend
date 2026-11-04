@@ -28,6 +28,7 @@ d('auction workflow B2C + B2B (real database)', () => {
       settle: await import('../../src/modules/auctions/auction-settlement.service.js'),
       checkout: await import('../../src/modules/auctions/auction-checkout.service.js'),
       shared: await import('../../src/modules/auctions/auction.shared.js'),
+      chat: await import('../../src/modules/auctions/auction-chat.service.js'),
       track: (await import('../../src/modules/order-overview/order-overview.service.js')),
       sellerOrders: new (await import('../../src/modules/seller-orders/seller-orders.service.js')).SellerOrdersService(),
       settlements: new (await import('../../src/modules/vendor-settlements/vendor-settlements.service.js')).VendorSettlementsService(),
@@ -224,6 +225,27 @@ d('auction workflow B2C + B2B (real database)', () => {
     expect(sh.awb).toBe('BD123')
     await svc.track.shipmentTracking.addEvent(sh.id, { status: 'PICKED_UP' }, U.seller.userId)
     expect((await one('SELECT status FROM seller_orders WHERE id = $1', [so.id])).status).toBe('SHIPPED')
+  })
+
+  it('seller and the winning buyer can chat; nobody else can; it opens only once there is a winner', async () => {
+    const prod = await makeProduct(1)
+    const a = await svc.admin.createAuction(U.admin, { productId: prod.productId, startPrice: 10000, registrationFee: 500, bidIncrement: 500, startsAt: new Date(Date.now() - 1000).toISOString(), durationHours: 6 })
+    await q('UPDATE auctions SET vendor_id = $2 WHERE id = $1', [a.id, U.seller.id])
+    const seller = U.sellerActor
+    const buyer = { kind: 'BUYER', userId: U.l1 }
+    await expect(svc.chat.listChat(seller, a.id)).rejects.toMatchObject({ code: 'CHAT_CLOSED' })      // no winner yet
+    await join(U.l1, a.id); await bid(U.l1, a.id, 12000)
+    await svc.admin.endNow(seller, a.id)
+    await svc.chat.sendChat(seller, a.id, { body: 'Congratulations! When can you pay?' })
+    await svc.chat.sendChat(buyer, a.id, { body: 'Paying today, please keep it packed.' })
+    const asBuyer = await svc.chat.listChat(buyer, a.id)
+    expect(asBuyer.role).toBe('BUYER')
+    expect(asBuyer.messages.map((m) => [m.from, m.mine])).toEqual([['SELLER', false], ['BUYER', true]])
+    expect(await svc.chat.unreadChat(seller, a.id)).toBe(1)                                   // the buyer's message is unread for the seller
+    await expect(svc.chat.sendChat(seller, a.id, { body: '   ' })).rejects.toMatchObject({ code: 'VALIDATION' })
+    // a loser, another vendor and an unrelated user are all refused
+    await expect(svc.chat.listChat({ kind: 'BUYER', userId: U.l2 }, a.id)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(svc.chat.sendChat({ kind: 'VENDOR', userId: U.loser.userId, vendorId: U.loser.id }, a.id, { body: 'hi' })).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
   it('reserve not met: ending closes it UNSOLD (fee refunded); with "waive reserve" the top bidder wins and can pay', async () => {
