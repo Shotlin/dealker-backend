@@ -38,7 +38,7 @@ const SHIP_LABEL = {
 function plainStatus(order, sellers) {
   if (order.status === 'CANCELLED') return 'This order was cancelled.'
   if (order.status === 'REFUNDED') return 'This order was returned and the money has been refunded.'
-  if (order.status === 'DELIVERED') return 'This order has been delivered.'
+  if (['DELIVERED', 'COMPLETED'].includes(order.status)) return 'This order has been delivered.'
   const s = sellers.map((x) => x.status)
   if (s.every((x) => x === 'DELIVERED')) return 'All parcels have been delivered.'
   if (s.some((x) => x === 'OUT_FOR_DELIVERY')) return 'A parcel is out for delivery today.'
@@ -133,7 +133,7 @@ export const orderOverview = {
     }
 
     const subtotal = n(o.subtotal)
-    const delivered = o.status === 'DELIVERED'
+    const delivered = ['DELIVERED', 'COMPLETED'].includes(o.status)
     return {
       order: {
         id: o.id, number: o.order_number, status: o.status, placed_at: o.created_at, delivered_at: o.delivered_at, cancelled_reason: o.cancelled_reason,

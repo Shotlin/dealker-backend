@@ -3,7 +3,7 @@ import { VendorSettlementsService } from '../vendor-settlements/vendor-settlemen
 
 const err = (statusCode, message, code = 'PAYOUT_ERROR') => Object.assign(new Error(message), { statusCode, code })
 const n = (x) => (x == null ? 0 : Number(x))
-const WINDOW_DAYS = 7
+const WINDOW_DAYS = 7 // used only when a listing does not say how many return days it has
 const settlements = new VendorSettlementsService()
 
 const LEDGER_LABEL = {
@@ -14,7 +14,7 @@ const LEDGER_LABEL = {
 const STATE_TEXT = {
   WAITING_DELIVERY: ['Waiting for delivery', 'The seller is paid only after the customer has received the parcel.'],
   RETURN_WINDOW: ['Delivered — in the return window', 'Dealker keeps the money for {days} days in case the customer returns it.'],
-  READY: ['Ready to be paid', 'The return window is over. You can pay the seller now.'],
+  READY: ['Ready to be paid', '{ready}'],
   PROCESSING: ['Payout in progress', 'A payout has been created. Mark it as paid once the bank transfer is done.'],
   PAID: ['Paid', 'The seller has been paid for this parcel.'],
   ON_HOLD: ['On hold', 'Payment is paused. Release the hold when the issue is sorted out.'],
@@ -32,23 +32,30 @@ export async function payoutBlocks(sos) {
     `SELECT l.seller_order_id, l.amount, p.id AS payout_id, p.payout_number, p.status, p.utr_number, p.paid_at, p.created_at
        FROM seller_order_payouts l JOIN settlement_payouts p ON p.id = l.payout_id WHERE l.seller_order_id = ANY($1) ORDER BY p.created_at DESC`, [ids])).rows
   const bal = (await query(`SELECT vendor_id, COALESCE(SUM(amount),0) AS b FROM settlement_ledger WHERE vendor_id = ANY($1) GROUP BY vendor_id`, [vendorIds])).rows
+  // The window follows the products in the parcel: the longest return period among them (0 = no returns).
+  const days = (await query(
+    `SELECT oi.seller_order_id, MAX(COALESCE(p.return_policy_days, $2))::int AS d
+       FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id
+      WHERE oi.seller_order_id = ANY($1) GROUP BY oi.seller_order_id`, [ids, WINDOW_DAYS])).rows
   const out = {}
   for (const so of sos) {
+    const windowDays = days.find((x) => x.seller_order_id === so.id)?.d ?? WINDOW_DAYS
     const link = links.find((l) => l.seller_order_id === so.id) || null
     const hold = holds.find((h) => h.seller_order_id === so.id) || holds.find((h) => !h.seller_order_id && h.vendor_id === so.vendor_id) || null
     const deliveredAt = so.delivered_at ? new Date(so.delivered_at) : null
-    const eligibleOn = deliveredAt ? new Date(deliveredAt.getTime() + WINDOW_DAYS * 86400000) : null
+    const eligibleOn = deliveredAt ? new Date(deliveredAt.getTime() + windowDays * 86400000) : null
     let state
     if (['CANCELLED', 'RETURNED'].includes(so.status) || so.payout_status === 'REVERSED') state = 'REVERSED'
     else if (link?.status === 'PAID') state = 'PAID'
     else if (link && ['PENDING', 'PROCESSING'].includes(link.status)) state = 'PROCESSING'
     else if (hold || so.payout_status === 'ON_HOLD') state = 'ON_HOLD'
-    else if (so.status !== 'DELIVERED') state = 'WAITING_DELIVERY'
+    else if (!['DELIVERED', 'CLOSED'].includes(so.status)) state = 'WAITING_DELIVERY'
     else if (eligibleOn && eligibleOn > new Date()) state = 'RETURN_WINDOW'
     else state = 'READY'
     const [label, why] = STATE_TEXT[state]
+    const ready = windowDays === 0 ? 'This item cannot be returned, so there is no waiting period. You can pay the seller now.' : 'The return window is over. You can pay the seller now.'
     out[so.id] = {
-      state, label, explanation: why.replace('{days}', String(WINDOW_DAYS)), eligible_on: eligibleOn, window_days: WINDOW_DAYS,
+      state, label, explanation: why.replace('{days}', String(windowDays)).replace('{ready}', ready), eligible_on: eligibleOn, window_days: windowDays,
       earns: n(so.payable_to_seller),
       hold: hold ? { reason: hold.reason, since: hold.created_at, vendor_wide: !hold.seller_order_id } : null,
       payout: link ? { id: link.payout_id, number: link.payout_number, status: link.status, amount: n(link.amount), utr: link.utr_number, paid_at: link.paid_at, created_at: link.created_at } : null,
