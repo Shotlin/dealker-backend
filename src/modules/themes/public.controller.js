@@ -1,5 +1,7 @@
 import { createHash } from 'crypto'
 import { withCardFields } from '../../utils/product-card-fields.js'
+import { getProductsByRules, normalizeRules } from './merch-rules.js'
+import { getCampaignDeal, isCampaignId } from './merch-deals.js'
 import { query } from '../../config/database.js'
 import { redis } from '../../config/redis.js'
 import { success, error } from '../../utils/apiResponse.js'
@@ -433,61 +435,7 @@ export class PublicThemeController {
     // Resolve products for sections that have product_ids or category_ids in merch_binding.
     // Without this step the mobile receives only IDs and renders nothing.
     const resolvedSections = await Promise.all(
-      rows.map(async (section) => {
-        if (STEAL_TABBED_TYPES.has(section.type)) {
-          return {
-            ...section,
-            config: await resolveStealDealsConfig(section.config, allocatedShopIds, priceMode),
-          }
-        }
-        const binding = section.merch_binding || {}
-        const productIds = Array.isArray(binding.product_ids) ? binding.product_ids : []
-        const categoryIds = Array.isArray(binding.category_ids) ? binding.category_ids : []
-        const limit = normalizeLimit(binding.limit, HOME_MANIFEST_SECTION_CAP, HOME_MANIFEST_SECTION_CAP)
-
-        // Static sections do not need products. Product sections with no
-        // manual/category binding, however, are still valid dashboard
-        // sections: their intended source is the store's live feed (for
-        // example Trending or Best Sellers). Resolve that feed here so the
-        // mobile receives one self-contained, shop-scoped manifest instead
-        // of relying on a second asynchronous home request.
-        if (productIds.length === 0 && categoryIds.length === 0) {
-          const products = await getImplicitSectionProducts(
-            section,
-            limit,
-            allocatedShopIds,
-            priceMode
-          )
-          if (products.length > 0) {
-            return { ...section, products }
-          }
-          return section
-        }
-
-        // Fetch manually pinned products first, preserving dashboard order
-        const manualProducts = productIds.length > 0
-          ? await getProductsByIds(productIds, allocatedShopIds, priceMode)
-          : []
-        const seenIds = manualProducts.map((p) => p.id)
-
-        // Fill remaining slots from category if needed
-        let products = manualProducts
-        if (products.length < limit && categoryIds.length > 0) {
-          const fillProducts = await getProductsByCategoryIds(
-            categoryIds,
-            limit - products.length,
-            seenIds,
-            allocatedShopIds,
-            priceMode
-          )
-          products = [...manualProducts, ...fillProducts]
-        }
-
-        return {
-          ...section,
-          products: products.slice(0, limit),
-        }
-      })
+      rows.map((section) => resolveManifestSection(section, allocatedShopIds, priceMode))
     )
 
     const responseData = {
@@ -514,6 +462,99 @@ export class PublicThemeController {
     reply.header('ETag', etag)
     reply.header('Cache-Control', 'private, max-age=60')
     return success(responseData, 'Section manifest')
+  }
+}
+
+/**
+ * Resolves one manifest section into what the app receives (products filled in).
+ * Shared by the public manifest endpoint and the admin Deals & Merchandising
+ * preview so the dashboard always shows exactly what shoppers get.
+ */
+export async function resolveManifestSection(section, allocatedShopIds, priceMode = 'retail') {
+  if (STEAL_TABBED_TYPES.has(section.type)) {
+    return {
+      ...section,
+      config: await resolveStealDealsConfig(section.config, allocatedShopIds, priceMode),
+    }
+  }
+  const binding = section.merch_binding || {}
+  // Products the admin hid from this section (Deals & Merchandising page).
+  const excluded = new Set(Array.isArray(binding.exclude_ids) ? binding.exclude_ids : [])
+  const productIds = (Array.isArray(binding.product_ids) ? binding.product_ids : []).filter((id) => !excluded.has(id))
+  const categoryIds = Array.isArray(binding.category_ids) ? binding.category_ids : []
+  const limit = normalizeLimit(binding.limit, HOME_MANIFEST_SECTION_CAP, HOME_MANIFEST_SECTION_CAP)
+
+  // Static sections do not need products. Product sections with no
+  // manual/category binding, however, are still valid dashboard
+  // sections: their intended source is the store's live feed (for
+  // example Trending or Best Sellers). Resolve that feed here so the
+  // mobile receives one self-contained, shop-scoped manifest instead
+  // of relying on a second asynchronous home request.
+  const rules = normalizeRules(binding.rules)
+  // Deal = an active promo campaign; its listings fill the section (see merch-deals.js).
+  const campaignId = isCampaignId(binding.campaign_id) ? binding.campaign_id : null
+  if (productIds.length === 0 && categoryIds.length === 0 && !rules && !campaignId) {
+    const products = (await getImplicitSectionProducts(
+      section,
+      limit,
+      allocatedShopIds,
+      priceMode
+    )).filter((p) => !excluded.has(p.id))
+    if (products.length > 0) {
+      return { ...section, products }
+    }
+    return section
+  }
+
+  // Fetch manually pinned products first, preserving dashboard order
+  const manualProducts = productIds.length > 0
+    ? await getProductsByIds(productIds, allocatedShopIds, priceMode)
+    : []
+  const seenIds = [...manualProducts.map((p) => p.id), ...excluded]
+
+  let deal = null
+  let dealProducts = []
+  if (campaignId) {
+    const found = await getCampaignDeal(campaignId)
+    deal = found.deal
+    const room = limit - manualProducts.length
+    const ids = found.productIds.filter((id) => !excluded.has(id) && !seenIds.includes(id)).slice(0, Math.max(room, 0))
+    dealProducts = ids.length ? await getProductsByIds(ids, allocatedShopIds, priceMode) : []
+    seenIds.push(...dealProducts.map((p) => p.id))
+  }
+
+  // Rule-based fill (price / discount / brand / rating… + sort) after the pinned products.
+  let ruleProducts = []
+  if (rules && manualProducts.length + dealProducts.length < limit) {
+    ruleProducts = (await getProductsByRules(rules, limit - manualProducts.length - dealProducts.length, seenIds, allocatedShopIds, priceMode)).products
+    seenIds.push(...ruleProducts.map((p) => p.id))
+  }
+
+  // Fill remaining slots from category if needed
+  let products = [...manualProducts, ...dealProducts, ...ruleProducts]
+  if (products.length < limit && categoryIds.length > 0) {
+    const fillProducts = await getProductsByCategoryIds(
+      categoryIds,
+      limit - products.length,
+      seenIds,
+      allocatedShopIds,
+      priceMode
+    )
+    products = [...products, ...fillProducts]
+  }
+
+  // "Fill the rest automatically": after pinned / deal / rule products, top up from the
+  // section's normal feed (trending, best sellers…) so pinning one product does not shrink the section.
+  if (binding.auto_fill === true && products.length < limit) {
+    const taken = new Set([...products.map((p) => p.id), ...excluded])
+    const topUp = (await getImplicitSectionProducts(section, limit, allocatedShopIds, priceMode)).filter((p) => !taken.has(p.id))
+    products = [...products, ...topUp]
+  }
+
+  return {
+    ...section,
+    ...(deal ? { deal } : {}),
+    products: products.slice(0, limit),
   }
 }
 
@@ -850,13 +891,26 @@ async function resolveStealDealsConfig(config, allocatedShopIds, priceMode) {
       const maxPrice = Number(tab.max_price)
       const hasCap = Number.isFinite(maxPrice) && maxPrice > 0
 
-      const [pinned, perChip] = await Promise.all([
+      // The tab's own price cap (e.g. "Under ₹1000") must be part of the rules query: applied only
+      // afterwards, the rules would pick their top items first and the cap could remove all of them.
+      const rawRules = tab.rules && typeof tab.rules === 'object' ? tab.rules : null
+      const tabRules = normalizeRules(
+        rawRules && hasCap
+          ? { ...rawRules, max_price: Math.min(Number(rawRules.max_price) > 0 ? Number(rawRules.max_price) : Infinity, maxPrice) }
+          : rawRules
+      )
+      const tabDeal = isCampaignId(tab.campaign_id) ? await getCampaignDeal(tab.campaign_id) : null
+      const dealProducts = tabDeal?.productIds.length ? await getProductsByIds(tabDeal.productIds.slice(0, STEAL_DEALS_TAB_CAP), allocatedShopIds, priceMode) : []
+      const [pinned, perChip, ruled] = await Promise.all([
         pinnedIds.length ? getProductsByIds(pinnedIds, allocatedShopIds, priceMode) : [],
         Promise.all(
           chips.map((c) =>
             getProductsByCategoryIds([c.category_id], STEAL_DEALS_TAB_CAP, [], allocatedShopIds, priceMode)
           )
         ),
+        tabRules
+          ? getProductsByRules(tabRules, STEAL_DEALS_TAB_CAP, Array.isArray(tab.exclude_ids) ? tab.exclude_ids : [], allocatedShopIds, priceMode).then((r) => r.products)
+          : [],
       ])
 
       const byId = new Map()
@@ -868,11 +922,17 @@ async function resolveStealDealsConfig(config, allocatedShopIds, priceMode) {
         byId.set(p.id, hit)
       }
       pinned.forEach((p) => tag(p, p.category_id))
+      dealProducts.forEach((p) => tag(p, p.category_id))
       perChip.forEach((list, i) => list.forEach((p) => tag(p, chips[i].category_id)))
+      ruled.forEach((p) => tag(p, p.category_id))
 
       // A tab with nothing bound (e.g. "Trending") falls back to the live
       // trending feed so it is never empty.
-      if (byId.size === 0 && chips.length === 0 && pinnedIds.length === 0) {
+      // `auto_fill` keeps that feed under the pinned / deal / rule products of this tab.
+      if (
+        (byId.size === 0 && chips.length === 0 && pinnedIds.length === 0 && !tabRules && !tabDeal) ||
+        (tab.auto_fill === true && byId.size < STEAL_DEALS_TAB_CAP)
+      ) {
         const pool = mergeUniqueProducts([
           await getTrendingProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
           await getDealProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
@@ -881,9 +941,10 @@ async function resolveStealDealsConfig(config, allocatedShopIds, priceMode) {
         pool.forEach((p) => tag(p, p.category_id))
       }
 
-      let products = [...byId.values()]
+      const hidden = new Set(Array.isArray(tab.exclude_ids) ? tab.exclude_ids : [])
+      let products = [...byId.values()].filter((p) => !hidden.has(p.id))
       if (hasCap) products = products.filter((p) => effectivePrice(p) <= maxPrice)
-      return { ...tab, products: products.slice(0, STEAL_DEALS_TAB_CAP) }
+      return { ...tab, ...(tabDeal?.deal ? { deal: tabDeal.deal } : {}), products: products.slice(0, STEAL_DEALS_TAB_CAP) }
     })
   )
   return { ...cfg, tabs }

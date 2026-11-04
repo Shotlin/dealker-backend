@@ -16,6 +16,7 @@ import { query, getClient } from '../../config/database.js'
 import { PricingService } from '../pricing/pricing.service.js'
 import { MerchandisingService, SECTIONS } from '../merchandising/merchandising.service.js'
 import { validatePriceParams } from '../pricing/price.engine.js'
+import { DealEntriesService } from './deal-entries.service.js'
 
 export const CAMPAIGN_TYPES = ['GENERAL', 'VENDOR', 'PRODUCT', 'DISCOUNT', 'FLASH_SALE', 'DEAL_OF_THE_DAY', 'CLEARANCE_SALE', 'COUPON']
 const TYPE_SECTION = { FLASH_SALE: 'FLASH_SALE', DEAL_OF_THE_DAY: 'DEAL_OF_THE_DAY', CLEARANCE_SALE: 'CLEARANCE_SALE' }
@@ -24,6 +25,7 @@ const httpError = (statusCode, message, code = 'CAMPAIGN_ERROR') => Object.assig
 
 const pricing = new PricingService()
 const merch = new MerchandisingService()
+const dealEntries = new DealEntriesService()
 
 function normalise(input, { forSchedule = false } = {}) {
   const type = String(input.type || 'GENERAL').toUpperCase()
@@ -63,7 +65,7 @@ function normalise(input, { forSchedule = false } = {}) {
       if (!discount) throw httpError(400, 'This campaign type needs a discount', 'VALIDATION')
     }
   }
-  const narrowed = scope.all || ['vendorIds', 'categoryIds', 'brands', 'listingIds'].some((k) => Array.isArray(scope[k]) && scope[k].length) || scope.owner || scope.channel
+  const narrowed = scope.all || ['vendorIds', 'categoryIds', 'brands', 'listingIds'].some((k) => Array.isArray(scope[k]) && scope[k].length) || scope.owner || scope.channel || scope.openToVendors
   if (type !== 'COUPON' && !narrowed) throw httpError(400, 'Choose which products take part (all products, a vendor, a category, a brand or specific products)', 'SCOPE_REQUIRED')
   if (type === 'VENDOR' && !(scope.vendorIds?.length)) throw httpError(400, 'A vendor campaign needs at least one vendor', 'VALIDATION')
   if (type === 'PRODUCT' && !(scope.listingIds?.length)) throw httpError(400, 'A product campaign needs at least one product', 'VALIDATION')
@@ -208,6 +210,8 @@ export class CampaignsService {
   /** Dry run for the form: what would the discount do to the chosen products right now? */
   async preview(input) {
     const v = normalise({ ...input, name: input.name || 'Preview' })
+    // Vendor-entry deals only price the listings vendors enter — nothing to preview until then.
+    if (v.scope?.openToVendors && !(v.scope.listingIds?.length)) return { summary: { total: 0, changed: 0, skipped: 0, listings: 0, skipReasons: {} }, sample: [], truncated: false }
     if (!v.discount) return { summary: { total: 0, changed: 0, skipped: 0, listings: (await pricing.resolveScope(v.scope)).length, skipReasons: {} }, sample: [], truncated: false }
     const excluded = await this.#busyListings(null)
     return pricing.previewPrice({ scope: { ...v.scope, excludeListingIds: excluded }, params: v.discount })
@@ -239,11 +243,21 @@ export class CampaignsService {
         return this.get(id)
       }
       const busy = await this.#busyListings(id)
-      const scope = { ...claim.scope, excludeListingIds: busy }
+      let scope = { ...claim.scope, excludeListingIds: busy }
+      // A deal opened to vendors only prices the listings vendors entered and an admin approved
+      // (plus any the admin picked by hand) — never the whole catalogue.
+      let noListings = false
+      if (claim.scope?.openToVendors) {
+        const entered = await dealEntries.approvedListingIds(id)
+        const listingIds = [...new Set([...(claim.scope.listingIds || []), ...entered])].filter((l) => !busy.includes(l))
+        const { openToVendors: _o, ...rest } = scope
+        scope = { ...rest, listingIds }
+        noListings = listingIds.length === 0
+      }
       let batchId = null
       let touched = []
 
-      if (claim.discount) {
+      if (claim.discount && !noListings) {
         try {
           const res = await pricing.applyPrice({ scope, params: claim.discount, note: `Campaign: ${claim.name}` }, actorId)
           batchId = res.batchId
@@ -256,7 +270,7 @@ export class CampaignsService {
       // (a "Flash Sale" product at its normal price would mislead customers).
       const idsForSection = !claim.section ? []
         : claim.discount ? touched.map((t) => t.id)
-        : await pricing.resolveScope(scope)
+        : noListings ? [] : await pricing.resolveScope(scope)
       const all = new Map(touched.map((t) => [t.id, t]))
       idsForSection.forEach((i) => { if (!all.has(i)) all.set(i, { id: i }) })
 

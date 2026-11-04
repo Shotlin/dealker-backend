@@ -177,6 +177,11 @@ export const buildApp = async () => {
   // Admin vendor KYC review (documents, decisions, history)
   await app.register(import("./modules/vendor-kyc-admin/kyc-admin.routes.js"), { prefix: "/api/v1/admin/vendor-kyc" });
 
+  // Vendor deal entries: join deals opened to vendors with own listings
+  await app.register(async (i) => i.register((await import("./modules/promo-campaigns/deal-entries.routes.js")).vendorDealRoutes), {
+    prefix: "/api/v1/vendor/deals",
+  });
+
   // Vendor-to-vendor B2B: requirements, quotes, split awards, escrow, dispatch, receipt
   await app.register(async (i) => i.register((await import("./modules/b2b/b2b.routes.js")).vendorB2bRoutes), {
     prefix: "/api/v1/vendor/b2b",

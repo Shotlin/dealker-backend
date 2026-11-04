@@ -28,6 +28,7 @@ import adminThemeRoutes from './themes/themes.routes.js'
 import adminThemeTabRoutes from './theme-tabs/theme-tabs.routes.js'
 import adminStorefrontStoreRoutes from './storefront-stores/storefront-stores.routes.js'
 import adminSectionRoutes from './sections/sections.routes.js'
+import adminMerchSectionRoutes from './merch-sections/merch-sections.routes.js'
 import adminReturnsRoutes from './returns/returns.routes.js'
 
 /**
@@ -90,5 +91,6 @@ export default async function adminRoutes(fastify) {
   fastify.register(adminThemeTabRoutes, { prefix: '/theme-tabs' })
   fastify.register(adminStorefrontStoreRoutes, { prefix: '/storefront-stores' })
   fastify.register(adminSectionRoutes, { prefix: '/sections' })
+  fastify.register(adminMerchSectionRoutes, { prefix: '/merch-sections' })
   fastify.register(adminReturnsRoutes, { prefix: '/returns' })
 }

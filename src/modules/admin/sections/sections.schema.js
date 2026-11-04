@@ -42,6 +42,18 @@ const merchBindingSchema = {
       items: { type: 'string', format: 'uuid' },
       default: [],
     },
+    // Products hidden from this section (Deals & Merchandising page).
+    exclude_ids: {
+      type: 'array',
+      items: { type: 'string', format: 'uuid' },
+      default: [],
+    },
+    // Filter + sort rules that fill the section after pinned products (see themes/merch-rules.js).
+    rules: { type: 'object' },
+    // Promo campaign ("deal") whose listings fill the section while it is ACTIVE.
+    campaign_id: { type: 'string', format: 'uuid' },
+    // Top up the section from its normal feed after pinned / deal / rule products.
+    auto_fill: { type: 'boolean' },
     limit: { type: 'integer', minimum: 1, maximum: 50 },
     source: { type: 'string', enum: ['category', 'tag', 'manual'] },
     tags: {
