@@ -5,6 +5,22 @@
  * @module modules/orders/orders.controller
  */
 
+/**
+ * The customer app only understands a short list of statuses. The server moves a finished order on to
+ * COMPLETED (and its parcels to CLOSED), which the app showed as "Order placed". For the customer
+ * those are still "delivered", so say so — staff and admin reads are not touched.
+ */
+const CUSTOMER_STATUS = { COMPLETED: 'DELIVERED', CLOSED: 'DELIVERED' }
+const forCustomer = (s) => CUSTOMER_STATUS[s] || s
+export function customerView(order) {
+  if (!order || typeof order !== 'object') return order
+  const out = { ...order, status: forCustomer(order.status) }
+  if (Array.isArray(order.status_history)) {
+    out.status_history = order.status_history.map((h) => ({ ...h, from_status: forCustomer(h.from_status), to_status: forCustomer(h.to_status) }))
+  }
+  return out
+}
+
 export class OrdersController {
   /**
    * @param {import('./orders.service.js').OrdersService} service
@@ -59,7 +75,8 @@ export class OrdersController {
       shopId: req.user?.shopId || null,
     }
     const order = await this.service.getOrderById(orderId, viewer)
-    return reply.status(200).send({ success: true, data: order })
+    const isOwner = order?.customer_id && order.customer_id === viewer.userId
+    return reply.status(200).send({ success: true, data: isOwner ? customerView(order) : order })
   }
 
   // Self-service "my orders" — always the caller's own orders. The former
@@ -79,7 +96,7 @@ export class OrdersController {
       status: req.query.status || null,
     }
     const orders = await this.service.listOrders(params)
-    return reply.status(200).send({ success: true, data: orders })
+    return reply.status(200).send({ success: true, data: Array.isArray(orders) ? orders.map(customerView) : orders })
   }
 
   getActiveOrder = async (req, reply) => {
@@ -88,7 +105,7 @@ export class OrdersController {
     if (!order) {
       return reply.status(404).send({ success: false, message: 'No active order' })
     }
-    return reply.status(200).send({ success: true, data: order })
+    return reply.status(200).send({ success: true, data: customerView(order) })
   }
 
   cancelOrder = async (req, reply) => {

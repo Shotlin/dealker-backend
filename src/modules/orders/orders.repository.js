@@ -542,8 +542,9 @@ export class OrdersRepository {
     }
 
     if (status) {
-      conditions.push(`status = $${idx}`)
-      params.push(status)
+      // "Delivered" for a customer includes orders the server has since marked COMPLETED.
+      conditions.push(`status = ANY($${idx}::text[])`)
+      params.push(status === 'DELIVERED' ? ['DELIVERED', 'COMPLETED'] : [status])
       idx++
     }
 
