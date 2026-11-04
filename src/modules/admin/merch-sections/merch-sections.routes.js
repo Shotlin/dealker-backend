@@ -62,7 +62,11 @@ export default async function adminMerchSectionRoutes(fastify) {
   })
 
   // Deals (promo campaigns) and where each is shown. Create/edit them on the Campaigns page.
-  fastify.get('/deals', async () => {
+  // Deals are campaigns, so they follow the Campaigns permissions (on top of the admin check above).
+  const viewDeals = { preHandler: fastify.requirePermission('campaigns.view') }
+  const manageDeals = { preHandler: fastify.requirePermission('campaigns.manage') }
+
+  fastify.get('/deals', viewDeals, async () => {
     const { rows: deals } = await query(
       `SELECT c.id, c.name, c.type, c.status, c.starts_at, c.ends_at, c.discount, c.listing_count, c.section,
               c.open_to_vendors, c.entry_deadline, c.min_vendor_tier, c.require_approval, c.max_entries_per_vendor,
@@ -85,9 +89,10 @@ export default async function adminMerchSectionRoutes(fastify) {
   })
 
   // Vendor entries for a deal: queue, approve / reject, and the open-to-vendors settings.
-  fastify.get('/deals/:id/entries', { schema: { params: idParams } },
+  fastify.get('/deals/:id/entries', { ...viewDeals, schema: { params: idParams } },
     guard(async (req) => success(await entries.listForAdmin(req.params.id, String(req.query?.status || '').toUpperCase()), 'Deal entries')))
   fastify.post('/deals/:id/entries/decide', {
+    ...manageDeals,
     schema: {
       params: idParams,
       body: {
@@ -102,6 +107,7 @@ export default async function adminMerchSectionRoutes(fastify) {
     },
   }, guard(async (req) => success(await entries.decide(req.params.id, req.body.ids, req.body.decision, req.body.reason, req.user.id), 'Entries updated')))
   fastify.patch('/deals/:id/vendor-entry', {
+    ...manageDeals,
     schema: {
       params: idParams,
       body: {
