@@ -595,6 +595,8 @@ export const buildApp = async () => {
   const { adminSubscriptionsRoutes, vendorSubscriptionsRoutes } = await import("./modules/subscriptions/subscriptions.routes.js");
   await app.register(adminSubscriptionsRoutes, { prefix: "/api/v1/admin/subscriptions" });
   await app.register(vendorSubscriptionsRoutes, { prefix: "/api/v1/subscriptions" });
+  const { vendorGrowthRoutes } = await import("./modules/vendor-growth/vendor-growth.routes.js");
+  await app.register(vendorGrowthRoutes, { prefix: "/api/v1/vendor/growth" });
 
   // Promotional campaigns (flash sale, deal of the day, clearance, coupons…)
   const { adminCampaignsRoutes } = await import("./modules/promo-campaigns/campaigns.routes.js");

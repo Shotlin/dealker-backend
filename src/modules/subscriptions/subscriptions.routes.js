@@ -9,6 +9,7 @@
 import { requireVendorScope } from '../../middlewares/vendor-scope.js'
 import { SubscriptionsService } from './subscriptions.service.js'
 import { vendorTimeline } from './vendor-timeline.service.js'
+import { SubscriptionPurchase } from './subscription-purchase.js'
 
 export const subscriptionsService = new SubscriptionsService()
 
@@ -51,6 +52,35 @@ export const adminSubscriptionsRoutes = async function subscriptionsAdminRoutes(
 }
 
 export const vendorSubscriptionsRoutes = async function subscriptionsVendorRoutes(fastify) {
+  const purchase = new SubscriptionPurchase(subscriptionsService)
+  const vendorOnly = [fastify.authenticate, requireVendorScope({ requireVendor: true })]
+
+  /** Plans a vendor can buy (paid tiers that are switched on). */
+  fastify.get('/plans', {
+    preHandler: vendorOnly,
+    handler: async (request, reply) => {
+      try { return { success: true, data: await purchase.plans() } } catch (e) { return send(reply, e) }
+    },
+  })
+
+  /** Start a purchase / renewal → Razorpay order. body: { tier, cycle: MONTHLY | YEARLY } */
+  fastify.post('/checkout', {
+    preHandler: vendorOnly,
+    schema: { body: { type: 'object', required: ['tier'], properties: { tier: { type: 'string' }, cycle: { type: 'string' } } } },
+    handler: async (request, reply) => {
+      try { return { success: true, data: await purchase.checkout(request.vendorId, request.user.id, request.body) } } catch (e) { return send(reply, e) }
+    },
+  })
+
+  /** Confirm the Razorpay payment and activate the plan. body: { orderId, paymentId, signature } */
+  fastify.post('/verify', {
+    preHandler: vendorOnly,
+    schema: { body: { type: 'object', required: ['orderId', 'paymentId', 'signature'], properties: { orderId: { type: 'string' }, paymentId: { type: 'string' }, signature: { type: 'string' } } } },
+    handler: async (request, reply) => {
+      try { return { success: true, data: await purchase.verify(request.vendorId, request.user.id, request.body) } } catch (e) { return send(reply, e) }
+    },
+  })
+
   fastify.get('/me', {
     preHandler: [fastify.authenticate, requireVendorScope({ requireVendor: true })],
     handler: async (request, reply) => {
