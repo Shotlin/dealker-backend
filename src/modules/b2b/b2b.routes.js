@@ -1,5 +1,6 @@
 import { b2b } from './b2b.service.js'
 import { requireVendorScope } from '../../middlewares/vendor-scope.js'
+import { readInvoiceUpload, attachOrderInvoice, sendOrderInvoice } from '../invoices/order-invoice.js'
 
 const uuid = { type: 'string', format: 'uuid' }
 const wrap = (fn) => async (req, reply) => {
@@ -90,6 +91,14 @@ export async function vendorB2bRoutes(fastify) {
       fulfilmentType: { enum: ['DELIVERY', 'PICKUP'] }, pickupAt: { type: 'string' }, pickupNote: { type: 'string', maxLength: 500 } } } },
   }, wrap(async (req) => { await b2b.sellerUpdate(req.params.id, req.vendorId, req.body, actor(req)); return { success: true } }))
   fastify.get('/orders/:id', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.orderDetail(req.params.id, { vendorId: req.vendorId }) })))
+  // The seller's own invoice for the order — required before packing / dispatching.
+  fastify.post('/orders/:id/invoice', { preHandler: pre }, wrap(async (req) =>
+    ({ success: true, data: await attachOrderInvoice('B2B_ORDER', req.params.id, req.vendorId, await readInvoiceUpload(req)) })))
+  fastify.get('/orders/:id/invoice', { preHandler: pre }, wrap(async (req, reply) => {
+    // the buyer may view it too, once the seller has uploaded it
+    const d = await b2b.orderDetail(req.params.id, { vendorId: req.vendorId })
+    return sendOrderInvoice('B2B_ORDER', d.order.id, null, reply, { download: !!req.query?.download })
+  }))
   fastify.post('/orders/:id/cancel', {
     preHandler: pre,
     schema: { body: { type: 'object', required: ['reason'], properties: { reason: { type: 'string', minLength: 3, maxLength: 500 } } } },
@@ -144,6 +153,10 @@ export async function adminB2bRoutes(fastify) {
     schema: { body: { type: 'object', properties: { receivedQuantity: { type: 'integer', minimum: 0 }, ok: { type: 'boolean' }, note: { type: 'string', maxLength: 1000 } } } },
   }, wrap(async (req) => { await b2b.receive(req.params.id, req.body || {}, actor(req)); return { success: true } }))
   fastify.get('/orders/:id', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.orderDetail(req.params.id, { isAdmin: true }) })))
+  fastify.post('/orders/:id/invoice', { preHandler: pre }, wrap(async (req) =>
+    ({ success: true, data: await attachOrderInvoice('B2B_ORDER', req.params.id, null, await readInvoiceUpload(req)) })))
+  fastify.get('/orders/:id/invoice', { preHandler: pre }, wrap(async (req, reply) =>
+    sendOrderInvoice('B2B_ORDER', req.params.id, null, reply, { download: !!req.query?.download })))
   fastify.post('/orders/:id/cancel', {
     preHandler: pre,
     schema: { body: { type: 'object', required: ['reason'], properties: { reason: { type: 'string', minLength: 3, maxLength: 500 } } } },

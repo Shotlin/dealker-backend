@@ -12,6 +12,7 @@
 import { requireVendorScope, isPlatformUser } from '../../middlewares/vendor-scope.js'
 import { SellerOrdersService } from './seller-orders.service.js'
 import { shipmentTracking } from '../order-overview/order-overview.service.js'
+import { readInvoiceUpload, attachOrderInvoice, sendOrderInvoice } from '../invoices/order-invoice.js'
 
 const service = new SellerOrdersService()
 
@@ -65,7 +66,34 @@ export const sellerOrdersRoutes = async function sellerOrderRoutes(fastify) {
       } catch (err) {
         if (err.code === 'NOT_FOUND') return reply.status(404).send({ success: false, message: err.message })
         if (err.code === 'INVALID_STATUS') return reply.status(400).send({ success: false, message: err.message })
-        if (err.code === 'FORBIDDEN_TRANSITION') return reply.status(err.statusCode || 403).send({ success: false, message: err.message })
+        if (err.code === 'FORBIDDEN_TRANSITION' || err.code === 'INVOICE_REQUIRED') return reply.status(err.statusCode || 403).send({ success: false, code: err.code, message: err.message })
+        throw err
+      }
+    },
+  })
+
+  /** Upload (or replace) the seller's invoice for this order — required before packing. multipart: file + invoiceNumber */
+  fastify.post('/:id/invoice', {
+    preHandler: [fastify.authenticate, requireVendorScope(), guard('seller_orders.manage')],
+    handler: async (request, reply) => {
+      try {
+        const upload = await readInvoiceUpload(request)
+        const invoice = await attachOrderInvoice('SELLER_ORDER', request.params.id, request.vendorId || null, upload)
+        return { success: true, data: invoice }
+      } catch (err) {
+        if (err.statusCode && err.statusCode < 500) return reply.status(err.statusCode).send({ success: false, code: err.code, message: err.message })
+        throw err
+      }
+    },
+  })
+
+  fastify.get('/:id/invoice', {
+    preHandler: [fastify.authenticate, requireVendorScope(), guard('seller_orders.view')],
+    handler: async (request, reply) => {
+      try {
+        return await sendOrderInvoice('SELLER_ORDER', request.params.id, request.vendorId || null, reply, { download: !!request.query?.download })
+      } catch (err) {
+        if (err.statusCode && err.statusCode < 500) return reply.status(err.statusCode).send({ success: false, code: err.code, message: err.message })
         throw err
       }
     },
@@ -87,6 +115,9 @@ export const sellerOrdersRoutes = async function sellerOrderRoutes(fastify) {
         return reply.status(409).send({ success: false, code: 'NOT_PAID', message: 'The buyer has not paid yet' })
       }
       try {
+        if (request.vendorId && !so.invoice) {
+          return reply.status(409).send({ success: false, code: 'INVOICE_REQUIRED', message: 'Upload your invoice for this order before shipping it' })
+        }
         const { courierName, awb, trackingUrl } = request.body
         await shipmentTracking.createManual(so.id, { provider: 'SELF', courierName, awb, trackingUrl }, request.user?.id)
         const sh = (await service.getById(so.id, request.vendorId || null))?.shipment

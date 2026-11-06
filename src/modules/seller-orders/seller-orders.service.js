@@ -12,6 +12,7 @@ import { query, getClient } from '../../config/database.js'
 import { logger } from '../../config/logger.js'
 import { ShopProductsRepository } from '../shop-products/shop-products.repository.js'
 import { announceOrderStatusById } from '../orders/order-events.js'
+import { assertInvoiceAttached, stripInvoicePath } from '../invoices/order-invoice.js'
 
 const shopProductsRepo = new ShopProductsRepository()
 const TERMINAL = new Set(['CANCELLED', 'DELIVERED', 'CLOSED', 'RETURNED'])
@@ -121,7 +122,7 @@ export class SellerOrdersService {
       `SELECT * FROM shipments WHERE seller_order_id = $1 ORDER BY created_at DESC`,
       [id]
     )
-    return { ...rows[0], items, shipment: shipments[0] || null }
+    return { ...stripInvoicePath(rows[0]), items, shipment: shipments[0] || null }
   }
 
   /**
@@ -187,6 +188,9 @@ export class SellerOrdersService {
         throw err
       }
     }
+
+    // Packing needs the seller's own invoice on file (platform staff may override).
+    if (['PACKED', 'READY_TO_SHIP'].includes(nextStatus)) assertInvoiceAttached(current, { isVendor: !!vendorId })
 
     const now = new Date()
     const stamps =

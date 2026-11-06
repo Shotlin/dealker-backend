@@ -5,6 +5,7 @@ import { logger } from '../../config/logger.js'
 import { NotificationsRepository } from '../notifications/notifications.repository.js'
 import { sendPush } from '../../utils/pushNotification.js'
 import { BULK_FROM, demandTags, matchInventory, modelKey, parseStorage } from './demand.match.js'
+import { assertInvoiceAttached, stripInvoicePath } from '../invoices/order-invoice.js'
 
 const err = (statusCode, message, code = 'B2B_ERROR', extra = {}) => Object.assign(new Error(message), { statusCode, code, ...extra })
 const round2 = (n) => Math.round(Number(n) * 100) / 100
@@ -900,6 +901,8 @@ export const b2b = {
       const FLOW = { PACKED: ['PAID'], DISPATCHED: ['PAID', 'PACKED'], DELIVERED: ['DISPATCHED'] }
       if (!FLOW[status]) throw err(400, 'Invalid status', 'VALIDATION_ERROR')
       if (!FLOW[status].includes(o.status)) throw err(409, o.status === 'PENDING_PAYMENT' ? 'The buyer has not paid yet — escrow must be funded before dispatch' : `Cannot move from ${o.status} to ${status}`, 'INVALID_TRANSITION')
+      // Packing (or dispatching straight from PAID) needs the seller's own invoice on file.
+      if (['PACKED', 'DISPATCHED'].includes(status)) assertInvoiceAttached(o, { isVendor: !actor.isAdmin })
       const pickup = status === 'DISPATCHED' && fulfilmentType === 'PICKUP'
       if (status === 'DISPATCHED' && !pickup && !(courierName && awb)) throw err(400, 'Courier name and tracking number (AWB) are required', 'VALIDATION_ERROR')
       if (pickup && !(pickupAt && new Date(pickupAt) > new Date(Date.now() - 3600000))) throw err(400, 'Choose a pickup date and time in the future', 'VALIDATION_ERROR')
@@ -1026,7 +1029,7 @@ export const b2b = {
                   AND (' ' || btrim(regexp_replace(lower(p.name), '[^a-z0-9]+', ' ', 'g')) || ' ') LIKE '% ' || r.model_key || ' %' LIMIT 1) AS thumbnail_url
          ${base} ORDER BY (o.status='DISPUTED') DESC, o.created_at DESC LIMIT ${lim} OFFSET ${off}`, params)
     const n = (x) => (x == null ? x : Number(x))
-    return { data: rows.map((o) => ({ ...o, unit_price: n(o.unit_price), subtotal: n(o.subtotal), commission_percent: n(o.commission_percent), commission_amount: n(o.commission_amount), seller_payable: n(o.seller_payable), released_amount: n(o.released_amount) })), pagination: { page: Number(page), limit: lim, total: cnt.rows[0].n } }
+    return { data: rows.map((o) => ({ ...stripInvoicePath(o), unit_price: n(o.unit_price), subtotal: n(o.subtotal), commission_percent: n(o.commission_percent), commission_amount: n(o.commission_amount), seller_payable: n(o.seller_payable), released_amount: n(o.released_amount) })), pagination: { page: Number(page), limit: lim, total: cnt.rows[0].n } }
   },
 
   /** Order tracking: the order, its requirement, who the other party is (revealed once paid), payment and event trail. */
@@ -1048,7 +1051,7 @@ export const b2b = {
     const payment = o.payment_id ? (await query(`SELECT amount, method, reference, status, paid_at FROM b2b_payments WHERE id=$1`, [o.payment_id])).rows[0] : null
     const n = (x) => (x == null ? x : Number(x))
     return {
-      order: { ...o, unit_price: n(o.unit_price), subtotal: n(o.subtotal), commission_percent: n(o.commission_percent), commission_amount: n(o.commission_amount), seller_payable: n(o.seller_payable), released_amount: n(o.released_amount) },
+      order: { ...stripInvoicePath(o), unit_price: n(o.unit_price), subtotal: n(o.subtotal), commission_percent: n(o.commission_percent), commission_amount: n(o.commission_amount), seller_payable: n(o.seller_payable), released_amount: n(o.released_amount) },
       requirement: num(r),
       seller: { name: seller?.name, ...(paid && !isSeller ? { phone: seller?.phone, city: seller?.city, pincode: seller?.pincode, address: seller?.address } : { city: seller?.city }) },
       buyer: buyer ? { name: buyer.name, ...(paid && !isBuyer ? { phone: buyer.phone } : {}) } : { name: 'Dealker' },
