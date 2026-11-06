@@ -312,7 +312,8 @@ export async function listIncoming(actor, f = {}) {
   const { rows } = await query(
     `SELECT r.* FROM repair_requests r
       WHERE r.flow = 'MARKETPLACE' AND r.status = 'REQUESTED' AND r.offers_close_at > NOW()
-      ORDER BY r.created_at DESC LIMIT 300`)
+        AND r.user_id IS DISTINCT FROM $1
+      ORDER BY r.created_at DESC LIMIT 300`, [actor.userId || null])
   const mine = []
   for (const r of rows) { const near = nearestShop(shops, r, s.search_radius_km); if (near) mine.push({ r, near }) }
   const ids = mine.map((m) => m.r.id)
