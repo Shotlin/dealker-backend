@@ -1,5 +1,10 @@
 import { query } from '../../../config/database.js'
 
+// Platform shop also owns marketplace (vendor) orders that carry shop_id NULL
+// (same rule as admin/orders.repository.js).
+const orderShopClause = (idx, alias = 'o') =>
+  `(${alias}.shop_id = $${idx} OR (${alias}.shop_id IS NULL AND ${alias}.is_marketplace = TRUE AND EXISTS (SELECT 1 FROM shops ps WHERE ps.id = $${idx} AND ps.is_platform = TRUE)))`
+
 export class AdminAnalyticsRepository {
   async getSalesAnalytics({ startDate, endDate, groupBy = 'day', shopId }) {
     const trunc = groupBy === 'month' ? 'month' : groupBy === 'week' ? 'week' : 'day'
@@ -7,7 +12,7 @@ export class AdminAnalyticsRepository {
     let dateFilter = "WHERE o.status = 'DELIVERED'"
     if (startDate) { params.push(startDate); dateFilter += ` AND o.created_at >= $${params.length}` }
     if (endDate) { params.push(endDate); dateFilter += ` AND o.created_at <= $${params.length}` }
-    if (shopId) { params.push(shopId); dateFilter += ` AND o.shop_id = $${params.length}` }
+    if (shopId) { params.push(shopId); dateFilter += ` AND ${orderShopClause(params.length)}` }
 
     const { rows: timeSeries } = await query(
       `SELECT DATE_TRUNC('${trunc}', o.created_at) AS period,
@@ -51,7 +56,7 @@ export class AdminAnalyticsRepository {
     let dateFilter = "WHERE o.status = 'DELIVERED'"
     if (startDate) { params.push(startDate); dateFilter += ` AND o.created_at >= $${params.length}` }
     if (endDate) { params.push(endDate); dateFilter += ` AND o.created_at <= $${params.length}` }
-    if (shopId) { params.push(shopId); dateFilter += ` AND o.shop_id = $${params.length}` }
+    if (shopId) { params.push(shopId); dateFilter += ` AND ${orderShopClause(params.length)}` }
 
     const { rows } = await query(
       `SELECT p.id, p.name, p.thumbnail_url, c.name AS category,
@@ -84,7 +89,7 @@ export class AdminAnalyticsRepository {
   async getCustomerCohorts({ shopId } = {}) {
     const params = []
     let orderShopFilter = ''
-    if (shopId) { params.push(shopId); orderShopFilter = ` AND o.shop_id = $${params.length}` }
+    if (shopId) { params.push(shopId); orderShopFilter = ` AND ${orderShopClause(params.length)}` }
 
     const { rows } = await query(
       `WITH cohorts AS (
@@ -125,7 +130,7 @@ export class AdminAnalyticsRepository {
     const fromClause = shopId
       ? 'FROM delivery_assignments da JOIN orders o ON o.id = da.order_id'
       : 'FROM delivery_assignments da'
-    if (shopId) { params.push(shopId); dateFilter += ` AND o.shop_id = $${params.length}` }
+    if (shopId) { params.push(shopId); dateFilter += ` AND ${orderShopClause(params.length)}` }
 
     const { rows: [summary] } = await query(
       `SELECT COUNT(*)::int AS total_deliveries,
@@ -169,7 +174,7 @@ export class AdminAnalyticsRepository {
     let dateFilter = "WHERE o.status = 'DELIVERED'"
     if (startDate) { params.push(startDate); dateFilter += ` AND o.created_at >= $${params.length}` }
     if (endDate) { params.push(endDate); dateFilter += ` AND o.created_at <= $${params.length}` }
-    if (shopId) { params.push(shopId); dateFilter += ` AND o.shop_id = $${params.length}` }
+    if (shopId) { params.push(shopId); dateFilter += ` AND ${orderShopClause(params.length)}` }
 
     const { rows: [rev] } = await query(
       `SELECT SUM(o.total_amount) AS gross_revenue,
@@ -228,7 +233,7 @@ export class AdminAnalyticsRepository {
     let dateFilter = "WHERE o.status = 'DELIVERED'"
     if (startDate) { params.push(startDate); dateFilter += ` AND o.created_at >= $${params.length}` }
     if (endDate) { params.push(endDate); dateFilter += ` AND o.created_at <= $${params.length}` }
-    if (shopId) { params.push(shopId); dateFilter += ` AND o.shop_id = $${params.length}` }
+    if (shopId) { params.push(shopId); dateFilter += ` AND ${orderShopClause(params.length)}` }
 
     const { rows: [summary] } = await query(
       `SELECT COALESCE(SUM(COALESCE(o.tip_amount, 0)), 0) AS total_tips,
@@ -270,11 +275,11 @@ export class AdminAnalyticsRepository {
     const getStats = async (start, end) => {
       const params = [start, end]
       let shopFilter = ''
-      if (shopId) { params.push(shopId); shopFilter = ` AND shop_id = $${params.length}` }
+      if (shopId) { params.push(shopId); shopFilter = ` AND ${orderShopClause(params.length)}` }
       const { rows: [s] } = await query(
-        `SELECT SUM(total_amount) AS revenue, COUNT(*)::int AS orders,
-                COUNT(DISTINCT user_id)::int AS customers, AVG(total_amount) AS aov
-         FROM orders WHERE status = 'DELIVERED' AND created_at >= $1 AND created_at <= $2${shopFilter}`,
+        `SELECT SUM(o.total_amount) AS revenue, COUNT(*)::int AS orders,
+                COUNT(DISTINCT o.user_id)::int AS customers, AVG(o.total_amount) AS aov
+         FROM orders o WHERE status = 'DELIVERED' AND created_at >= $1 AND created_at <= $2${shopFilter}`,
         params
       )
       return {
@@ -309,7 +314,7 @@ export class AdminAnalyticsRepository {
     let dateFilter = "WHERE o.status = 'DELIVERED'"
     if (startDate) { params.push(startDate); dateFilter += ` AND o.created_at >= $${params.length}` }
     if (endDate) { params.push(endDate); dateFilter += ` AND o.created_at <= $${params.length}` }
-    if (shopId) { params.push(shopId); dateFilter += ` AND o.shop_id = $${params.length}` }
+    if (shopId) { params.push(shopId); dateFilter += ` AND ${orderShopClause(params.length)}` }
 
     const { rows } = await query(
       `SELECT COALESCE(NULLIF(TRIM(o.delivery_address->>'city'), ''), 'Unknown') AS area,

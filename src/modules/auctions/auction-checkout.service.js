@@ -88,7 +88,7 @@ export async function checkout(userId, auctionId, { addressId, paymentMethod = '
       await client.query('INSERT INTO wallets (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING', [userId])
       wallet = await walletRepo.getForUpdate(client, userId)
       if (toPaise(wallet.balance) < toPaise(amountDue)) {
-        throw new AuctionError('INSUFFICIENT_WALLET', 'Not enough wallet balance — add money or pay online', 402, {
+        throw new AuctionError('INSUFFICIENT_WALLET', a.audience === 'B2B' ? 'Not enough wallet balance — move money from your sales earnings into your Dealker wallet' : 'Not enough wallet balance — add money or pay online', 402, {
           required: amountDue, balance: Number(wallet.balance), shortfall: fromPaise(toPaise(amountDue) - toPaise(wallet.balance)),
         })
       }
