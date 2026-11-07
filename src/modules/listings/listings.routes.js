@@ -26,6 +26,7 @@ const bodySchema = {
     wholesalePrice: { type: ['number', 'null'], minimum: 0 }, moq: { type: 'integer', minimum: 1, maximum: 10000 },
     b2bDiscountPct: { type: ['number', 'null'], minimum: 0, maximum: 50 }, b2bNotes: { type: ['string', 'null'], maxLength: 500 },
     videoUrl: { type: ['string', 'null'], maxLength: 2048 }, vendorQc: { type: ['object', 'null'] },
+    highlights: { type: ['array', 'null'], items: { type: 'string', maxLength: 120 }, maxItems: 6 },
   },
   additionalProperties: false,
 }

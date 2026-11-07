@@ -89,7 +89,9 @@ export async function getCondition(productId) {
     condition,
     label: LABELS[condition] || condition,
     isUsed,
-    grades: GRADE_ORDER.map((k) => ({ key: k, label: LABELS[k].replace('Used · ', '') })),
+    // Refurbished is its own grade (not on the used scale), so it shows as the single selected chip.
+    grades: condition === 'REFURBISHED' ? [{ key: 'REFURBISHED', label: 'Refurbished' }]
+      : GRADE_ORDER.map((k) => ({ key: k, label: LABELS[k].replace('Used · ', '') })),
     notes: r.condition_notes || null,
     usageDuration: r.usage_duration || null,
     batteryHealth: r.battery_health ?? null,

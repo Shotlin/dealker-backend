@@ -33,6 +33,18 @@ function cleanChecks(checks) {
   return out.length ? out : null
 }
 
+/** How good a vendor checklist answer is (0–100). Unknown answers count as neutral-good. */
+const ANSWER_POINTS = [
+  [/^(working fine|excellent|included|perfect|original|working|flawless|clean|clear)\b/i, 100],
+  [/^(good|new tips|no scratches)/i, 88],
+  [/^(minor issue|fair|partial|light)/i, 62],
+  [/^(not working|damaged|not included|broken|cracked)/i, 30],
+]
+function answerPoints(value) {
+  for (const [re, pts] of ANSWER_POINTS) if (re.test(value)) return pts
+  return 85
+}
+
 export class QcService {
   async getSettings() {
     const { rows } = await query(`SELECT * FROM qc_settings WHERE id = 1`)
@@ -231,6 +243,60 @@ export class QcService {
       client.release()
     }
     return { skipped: false, ...out }
+  }
+
+  /**
+   * Approving a vendor's listing also approves the QC report the vendor sent with it: their physical self-check
+   * (`shop_products.vendor_qc.checklist`) becomes the customer-facing QC report and the listing is marked QC_PASSED.
+   *
+   * Only vendor listings that actually carry a self-check are touched (nothing is invented for a listing without
+   * one), and a manual admin decision (passed or failed) is never overwritten. Imperfect answers are kept as
+   * WARN rows so the customer sees them honestly. Returns `{ accepted, score }`; never throws.
+   */
+  async acceptVendorSelfCheck(listingId, actorId = null) {
+    try {
+      const { rows } = await query(
+        `SELECT sp.qc_status, sp.qc_mode, sp.vendor_qc, p.owner_type
+           FROM shop_products sp JOIN products p ON p.id = sp.product_id
+          WHERE sp.id = $1 AND sp.deleted_at IS NULL`, [listingId])
+      const r = rows[0]
+      if (!r || r.owner_type !== 'VENDOR') return { accepted: false }
+      const cl = r.vendor_qc && typeof r.vendor_qc === 'object' ? r.vendor_qc.checklist : null
+      if (!cl || typeof cl !== 'object' || !Object.keys(cl).length) return { accepted: false }
+      if (r.qc_mode === 'MANUAL' && ['QC_PASSED', 'QC_FAILED'].includes(r.qc_status)) return { accepted: r.qc_status === 'QC_PASSED' }
+
+      const checks = []
+      let total = 0
+      for (const [label, raw] of Object.entries(cl).slice(0, 30)) {
+        const value = String(raw ?? '').trim()
+        if (!label || !value) continue
+        const pts = answerPoints(value)
+        total += pts
+        checks.push({ label: String(label).slice(0, 80), status: pts >= 85 ? 'PASS' : 'WARN', detail: value.slice(0, 120) })
+      }
+      if (!checks.length) return { accepted: false }
+      const photos = Array.isArray(r.vendor_qc.photoAngles) ? r.vendor_qc.photoAngles.length : 0
+      if (photos >= 2) { checks.push({ label: 'Photos', status: 'PASS', detail: `${photos} angles photographed` }); total += 100 }
+      const score = Math.min(98, Math.round(total / checks.length))
+
+      const client = await getClient()
+      try {
+        await client.query('BEGIN')
+        await this.#record(client, listingId, {
+          toStatus: 'QC_PASSED', fromStatus: r.qc_status, mode: 'MANUAL', score, actorId,
+          notes: 'Approved with the seller’s QC report after review', results: checks,
+        })
+        await client.query('COMMIT')
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {})
+        throw e
+      } finally {
+        client.release()
+      }
+      return { accepted: true, score }
+    } catch {
+      return { accepted: false }
+    }
   }
 
   /** Background trigger (listing created/edited, invoice changed). Never throws. */

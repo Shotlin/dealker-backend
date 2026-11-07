@@ -81,4 +81,38 @@ d('vendor listings — sales channels (real database)', () => {
     expect(off.sell_b2b).toBe(false)
     await expect(listings.update(l.id, { sellB2c: false }, scope())).rejects.toMatchObject({ message: /at least one sales channel/ })
   })
+
+  it('approving a vendor listing approves the QC report it came with, and fills the customer page', async () => {
+    const { getCondition } = await import('../../src/modules/product-page/product-page.service.js')
+    const l = await listings.create(base({
+      condition: 'USED_GOOD', conditionNotes: 'Minor scuffs on frame', price: 17000, mrp: 24900, stock: 1,
+      usageDuration: '11 months', batteryHealth: 89, warrantyInfo: '3 Months', accessoriesIncluded: 'Charging case, Cable, GST invoice', hasInvoice: true,
+      vendorQc: { checklist: { Charging: 'Working', 'Ear tips': 'New tips included', 'Body Condition': 'Good', Camera: 'Minor issue' }, photoAngles: [{ url: 'a', angle: 'front' }, { url: 'b', angle: 'back' }] },
+    }), scope())
+    // before approval nothing is claimed for customers
+    expect((await getCondition(l.product_id)).qc).toBeNull()
+    const ap = await listings.approve(l.id, F.user.id)
+    expect(ap.approval_status).toBe('APPROVED')
+    expect(ap.qc_status).toBe('QC_PASSED')
+    expect(ap.qc_score).toBeGreaterThan(70)
+    const c = await getCondition(l.product_id)
+    expect(c.qc.checks.map((x) => x.label)).toEqual(expect.arrayContaining(['Charging', 'Camera', 'Photos', 'Battery']))
+    expect(c.qc.checks.find((x) => x.label === 'Camera').ok).toBe(false) // imperfect answers stay honest
+    expect(c.accessories).toEqual(['Charging case', 'Cable', 'GST invoice'])
+    expect(c.usageDuration).toBe('11 months')
+    const h = (await q(`SELECT highlights FROM products WHERE id = $1`, [l.product_id])).rows[0].highlights
+    expect(Object.values(h)).toEqual(expect.arrayContaining(['Dealker QC verified — every function tested', 'Battery health 89%']))
+  })
+
+  it('a listing without a seller self-check gets no invented QC report on approval', async () => {
+    const l = await listings.create(base({ price: 5000, mrp: 6000 }), scope())
+    const ap = await listings.approve(l.id, F.user.id)
+    expect(ap.qc_status).not.toBe('QC_PASSED')
+  })
+
+  it('a refurbished listing shows as its own grade', async () => {
+    const { getCondition } = await import('../../src/modules/product-page/product-page.service.js')
+    const l = await listings.create(base({ condition: 'REFURBISHED', price: 41999, mrp: 79900, stock: 1 }), scope())
+    expect((await getCondition(l.product_id)).grades).toEqual([{ key: 'REFURBISHED', label: 'Refurbished' }])
+  })
 })

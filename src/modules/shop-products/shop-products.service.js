@@ -15,6 +15,7 @@ import {
 } from '../../utils/audit-log.js'
 import { ERROR_CODES } from '../../constants/errors.js'
 import { VendorProcurementRepository } from '../vendor-procurement/vendor-procurement.repository.js'
+import { QcService } from '../qc/qc.service.js'
 
 /**
  * Shop Products service — business logic with Redis caching and
@@ -1497,6 +1498,9 @@ export class ShopProductsService {
       })
 
       await client.query('COMMIT')
+
+      // The QC report the vendor sent is approved together with the listing.
+      await new QcService().acceptVendorSelfCheck(shopProductId, actor.id)
 
       // R23.13: SCAN-based cache invalidation after COMMIT (the
       // approval state is part of the listing payload).

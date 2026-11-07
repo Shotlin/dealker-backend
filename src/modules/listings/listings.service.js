@@ -16,6 +16,12 @@ const USED = ['USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR']
  * with neither flag stays a plain retail listing.
  */
 export const wantsB2c = (x) => (x.sellB2c !== undefined && x.sellB2c !== null ? x.sellB2c !== false : x.sellB2b !== true)
+/** Seller-written highlights: up to 6 short lines, stored as {0:'…',1:'…'} like the rest of the catalogue. */
+function cleanHighlights(v) {
+  if (!Array.isArray(v)) return null
+  const lines = v.map((x) => String(x || '').trim().slice(0, 120)).filter(Boolean).slice(0, 6)
+  return lines.length ? { ...lines } : null
+}
 const err = (statusCode, message, code = 'LISTING_ERROR') => Object.assign(new Error(message), { statusCode, code })
 const slugify = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 80)
 
@@ -113,7 +119,7 @@ export const listingsService = {
               p.name, p.brand, p.description, p.category_id, c.name AS category_name, p.images, p.thumbnail_url, p.condition, p.condition_notes,
               p.usage_duration, p.warranty_info, p.accessories_included, p.battery_health, p.serial_number, p.imei, p.has_invoice, p.hsn_code,
               sp.qc_status, sp.qc_mode, sp.qc_score, sp.qc_notes, sp.qc_checked_at,
-              sp.sell_b2c, sp.sell_b2b, sp.wholesale_price, sp.min_order_qty, sp.b2b_discount_pct, sp.b2b_notes, sp.vendor_qc, p.video_url,
+              sp.sell_b2c, sp.sell_b2b, sp.wholesale_price, sp.min_order_qty, sp.b2b_discount_pct, sp.b2b_notes, sp.vendor_qc, p.video_url, p.highlights,
               p.gst_rate, p.specifications, p.return_policy_days, p.owner_type, p.owner_vendor_id AS vendor_id, COALESCE(v.name,'Dealker') AS owner_name
          ${BASE} AND sp.id = $1 ${scope.vendorId ? 'AND p.owner_vendor_id = $2' : ''}`, scope.vendorId ? [id, scope.vendorId] : [id])
     if (!rows[0]) throw err(404, 'Listing not found', 'NOT_FOUND')
@@ -210,6 +216,8 @@ export const listingsService = {
           input.batteryHealth ?? null, input.serialNumber || null, Boolean(input.hasInvoice), singleUnit ? 1 : 10,
           input.imei ? String(input.imei).replace(/[\s-]/g, '') : null])).rows[0].id
       if (input.videoUrl) await client.query(`UPDATE products SET video_url = $2 WHERE id = $1`, [pid, input.videoUrl])
+      const hl = cleanHighlights(input.highlights)
+      if (hl) await client.query(`UPDATE products SET highlights = $2::jsonb WHERE id = $1`, [pid, JSON.stringify(hl)])
       const spId = (await client.query(
         `INSERT INTO shop_products (shop_id, product_id, price, sale_price, mrp, stock_quantity, low_stock_threshold, max_order_qty, is_available, approval_status,
            approved_at, approved_by, seller_sku, min_order_qty, handling_time_days, weight_grams, cod_eligible, nationwide_shipping_enabled, local_delivery_enabled, listing_status,
@@ -233,7 +241,7 @@ export const listingsService = {
   async update(id, input, scope) {
     this.validate(input, { partial: true })
     const cur = await this.detail(id, scope)
-    const contentKeys = ['name', 'description', 'images', 'condition', 'conditionNotes', 'usageDuration', 'warrantyInfo', 'accessoriesIncluded', 'batteryHealth', 'categoryId', 'brand', 'serialNumber', 'imei']
+    const contentKeys = ['name', 'description', 'images', 'condition', 'conditionNotes', 'usageDuration', 'warrantyInfo', 'accessoriesIncluded', 'batteryHealth', 'categoryId', 'brand', 'serialNumber', 'imei', 'highlights']
     const contentChanged = contentKeys.some((k) => input[k] !== undefined)
     const cond = input.condition ?? cur.condition
     const merged = {
@@ -265,6 +273,7 @@ export const listingsService = {
       if (input.mrp !== undefined) set('price', input.mrp)
       if (input.stock !== undefined) set('stock_quantity', input.stock)
       if (input.videoUrl !== undefined) set('video_url', input.videoUrl || null)
+      if (input.highlights !== undefined) set('highlights', JSON.stringify(cleanHighlights(input.highlights) || {}))
       if (sets.length) await client.query(`UPDATE products SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1`, vals)
 
       const ss = []; const sv = [id]
@@ -305,6 +314,8 @@ export const listingsService = {
   },
 
   async approve(id, actorId) {
+    // The QC report the vendor sent is approved together with the listing (nothing is made up for listings without one).
+    await qc.acceptVendorSelfCheck(id, actorId)
     const qcSettings = await qc.getSettings()
     if (qcSettings.requirePassToPublish) {
       const { rows } = await query(`SELECT qc_status FROM shop_products WHERE id = $1 AND deleted_at IS NULL`, [id])
@@ -313,7 +324,31 @@ export const listingsService = {
     const { rowCount } = await query(
       `UPDATE shop_products SET approval_status='APPROVED', approved_at=NOW(), approved_by=$2, rejection_reason=NULL, updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, [id, actorId])
     if (!rowCount) throw err(404, 'Listing not found', 'NOT_FOUND')
+    await this.fillHighlights(id)
     return this.detail(id, {})
+  },
+
+  /**
+   * Customer-page highlights for a used / open-box / refurbished listing, built only from facts the seller entered
+   * (battery, warranty, return window) plus the QC verdict. A seller's own highlights are never overwritten.
+   */
+  async fillHighlights(id) {
+    try {
+      const { rows } = await query(
+        `SELECT p.id, p.highlights, p.condition, p.battery_health, p.warranty_info, p.return_policy_days, sp.qc_status
+           FROM shop_products sp JOIN products p ON p.id = sp.product_id WHERE sp.id = $1 AND sp.deleted_at IS NULL`, [id])
+      const r = rows[0]
+      if (!r || r.condition === 'NEW') return
+      if (r.highlights && typeof r.highlights === 'object' && Object.keys(r.highlights).length) return
+      const lines = []
+      if (r.qc_status === 'QC_PASSED') lines.push('Dealker QC verified — every function tested')
+      if (r.battery_health != null) lines.push(`Battery health ${r.battery_health}%`)
+      const w = String(r.warranty_info || '').trim()
+      if (w && !/^no warranty$/i.test(w)) lines.push(/warranty/i.test(w) ? w : `${w} seller warranty`)
+      if (Number(r.return_policy_days) > 0) lines.push(`${r.return_policy_days}-day return if it is not as described`)
+      if (!lines.length) return
+      await query(`UPDATE products SET highlights = $2::jsonb WHERE id = $1`, [r.id, JSON.stringify({ ...lines.slice(0, 4) })])
+    } catch { /* highlights are a nicety — never block an approval */ }
   },
 
   async reject(id, reason, actorId) {
