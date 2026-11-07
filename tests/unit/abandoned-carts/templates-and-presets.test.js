@@ -38,7 +38,7 @@ describe('quick coupon presets', () => {
     }
   })
 
-  it('defaults the abandonment threshold to 30 minutes when unset', () => {
-    expect(ABANDONMENT_THRESHOLD_MS).toBe(30 * 60 * 1000)
+  it('defaults the abandonment threshold to 3 seconds when unset (carts show within ~5 s)', () => {
+    expect(ABANDONMENT_THRESHOLD_MS).toBe(3000)
   })
 })

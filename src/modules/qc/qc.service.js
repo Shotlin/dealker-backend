@@ -263,7 +263,13 @@ export class QcService {
       if (!r || r.owner_type !== 'VENDOR') return { accepted: false }
       const cl = r.vendor_qc && typeof r.vendor_qc === 'object' ? r.vendor_qc.checklist : null
       if (!cl || typeof cl !== 'object' || !Object.keys(cl).length) return { accepted: false }
-      if (r.qc_mode === 'MANUAL' && ['QC_PASSED', 'QC_FAILED'].includes(r.qc_status)) return { accepted: r.qc_status === 'QC_PASSED' }
+      if (r.qc_mode === 'MANUAL' && r.qc_status === 'QC_FAILED') return { accepted: false }
+      if (r.qc_mode === 'MANUAL' && r.qc_status === 'QC_PASSED') {
+        // An admin's pass that already carries inspection rows stands; a bare pass (no rows) gets the seller's report attached.
+        const ev = (await query(
+          `SELECT 1 FROM listing_qc_events WHERE shop_product_id = $1 AND to_status = 'QC_PASSED' AND results IS NOT NULL LIMIT 1`, [listingId])).rows[0]
+        if (ev) return { accepted: true }
+      }
 
       const checks = []
       let total = 0

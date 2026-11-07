@@ -2,6 +2,7 @@ import { query, getClient } from '../../config/database.js'
 import {
   ABANDONED_CART_EVENT_TYPE,
   ABANDONED_CART_EXPIRY_MS,
+  ABANDONED_CART_REOPEN_WINDOW_MS,
 } from '../../constants/abandonedCart.js'
 
 /**
@@ -46,7 +47,36 @@ export class AbandonedCartsRepository {
       let episodeId
       let isNew = false
 
-      if (existing) {
+      // No OPEN episode: if the customer's last one was flipped to RECOVERED a moment
+      // ago (they just added another item), re-open it rather than stacking a new row.
+      let reopened = null
+      if (!existing) {
+        const { rows: [recent] } = await client.query(
+          `SELECT id FROM abandoned_carts
+            WHERE user_id = $1 AND price_mode = $2 AND status = 'RECOVERED'
+              AND recovered_at > NOW() - make_interval(secs => $3)
+            ORDER BY recovered_at DESC LIMIT 1 FOR UPDATE`,
+          [userId, priceMode, ABANDONED_CART_REOPEN_WINDOW_MS / 1000]
+        )
+        reopened = recent || null
+      }
+
+      if (reopened) {
+        isNew = true
+        episodeId = reopened.id
+        await client.query(
+          `UPDATE abandoned_carts
+              SET status = 'OPEN', recovered_at = NULL, abandoned_at = to_timestamp($2 / 1000.0),
+                  item_count = $3, total_quantity = $4, cart_value = $5, updated_at = NOW()
+            WHERE id = $1`,
+          [episodeId, abandonedAtMs, itemCount, totalQuantity, cartValue]
+        )
+        await client.query(
+          `INSERT INTO abandoned_cart_events (abandoned_cart_id, event_type, actor_type)
+           VALUES ($1, $2, 'SYSTEM')`,
+          [episodeId, ABANDONED_CART_EVENT_TYPE.DETECTED]
+        )
+      } else if (existing) {
         episodeId = existing.id
         await client.query(
           `UPDATE abandoned_carts

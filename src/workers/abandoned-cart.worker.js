@@ -1,7 +1,7 @@
 /**
  * Abandoned Cart Sweep Worker
  *
- * Polls every 15s for carts inactive past ABANDONMENT_THRESHOLD_MS
+ * Polls (every ABANDONED_CART_POLL_MS, 1-15 s) for carts inactive past ABANDONMENT_THRESHOLD_MS
  * (see src/constants/abandonedCart.js; ABANDONED_CART_THRESHOLD_MINUTES), following the same
  * in-process setInterval pattern as payment-expiry.worker.js rather than a
  * BullMQ repeatable job, since this runs inside the main API server and
@@ -34,11 +34,13 @@ import {
   ABANDONMENT_THRESHOLD_MS,
   ABANDONED_CART_SWEEP_BATCH_LIMIT,
   ABANDONED_CART_PRICE_MODES,
+  ABANDONED_CART_POLL_MS,
 } from '../constants/abandonedCart.js'
 
 let _intervalHandle = null
 let _fastify = null
-const POLL_INTERVAL_MS = 15 * 1000 // 15 seconds
+const POLL_INTERVAL_MS = ABANDONED_CART_POLL_MS
+let _sweeping = false // a slow tick must never overlap the next one
 
 const cartRepository = new CartRepository()
 const cartService = new CartService(cartRepository)
@@ -55,13 +57,17 @@ export function startAbandonedCartWorker(fastify) {
   if (_intervalHandle) return
   _fastify = fastify || null
 
-  logger.info('Abandoned cart sweep worker started (polling every 15s)')
+  logger.info({ pollMs: POLL_INTERVAL_MS }, 'Abandoned cart sweep worker started')
 
   _intervalHandle = setInterval(async () => {
+    if (_sweeping) return
+    _sweeping = true
     try {
       await _sweep()
     } catch (err) {
       logger.error({ err: err.message }, 'Abandoned cart worker poll error')
+    } finally {
+      _sweeping = false
     }
   }, POLL_INTERVAL_MS)
 
@@ -100,7 +106,7 @@ async function _sweep() {
       }
     }
 
-    logger.info(
+    logger.debug(
       { candidates: candidates.length, excluded: excluded.size },
       'Abandoned cart sweep tick complete'
     )

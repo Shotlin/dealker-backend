@@ -1,9 +1,20 @@
 // How long a cart must sit untouched before it counts as abandoned.
-// Default 30 min; override per environment with ABANDONED_CART_THRESHOLD_MINUTES
-// (e.g. 2 on a demo/test server so the flow can be watched live).
+// Default 3 seconds so a cart a customer just added to shows up in the vendor
+// and admin Abandoned Carts lists within ~5 s. Raise it per environment with
+// ABANDONED_CART_THRESHOLD_MINUTES (e.g. 30 for a "real" idle-time definition).
 const thresholdMinutes = Number(process.env.ABANDONED_CART_THRESHOLD_MINUTES)
+const DEFAULT_THRESHOLD_MS = 3 * 1000
 export const ABANDONMENT_THRESHOLD_MS =
-  (Number.isFinite(thresholdMinutes) && thresholdMinutes > 0 ? thresholdMinutes : 30) * 60 * 1000
+  Number.isFinite(thresholdMinutes) && thresholdMinutes > 0 ? thresholdMinutes * 60 * 1000 : DEFAULT_THRESHOLD_MS
+
+// How often the sweep worker looks for newly idle carts. Kept well under the
+// threshold so detection latency ≈ threshold + one poll (a 3 s threshold polls
+// every 1 s → ≤ ~4 s end to end); capped at 15 s for long thresholds.
+export const ABANDONED_CART_POLL_MS = Math.max(1000, Math.min(15 * 1000, Math.floor(ABANDONMENT_THRESHOLD_MS / 3)))
+
+// A cart that goes back to RECOVERED (customer touched it) and idles again within
+// this window re-opens the SAME episode instead of piling up a new row per add.
+export const ABANDONED_CART_REOPEN_WINDOW_MS = 10 * 60 * 1000
 
 // Per-sweep cap on how many inactive users the worker processes in one
 // 60s tick — keeps each run bounded even if a backlog builds up; the

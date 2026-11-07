@@ -58,7 +58,10 @@ export class AdminAbandonedCartsRepository {
               COALESCE((SELECT array_agg(DISTINCT v.name) FROM abandoned_cart_items ci
                           JOIN shops s ON s.id = ci.shop_id JOIN vendors v ON v.id = s.vendor_id
                          WHERE ci.abandoned_cart_id = ac.id), '{}') AS vendor_names,
-              (SELECT COUNT(*)::int FROM abandoned_cart_vendor_reminders r WHERE r.abandoned_cart_id = ac.id) AS vendor_reminder_count
+              (SELECT COUNT(*)::int FROM abandoned_cart_vendor_reminders r WHERE r.abandoned_cart_id = ac.id) AS vendor_reminder_count,
+              COALESCE((SELECT json_agg(json_build_object('name', t.product_name, 'quantity', t.quantity, 'thumbnail', t.product_thumbnail_url))
+                          FROM (SELECT ci.product_name, ci.quantity, ci.product_thumbnail_url FROM abandoned_cart_items ci
+                                 WHERE ci.abandoned_cart_id = ac.id ORDER BY ci.line_total DESC LIMIT 3) t), '[]'::json) AS top_products
        FROM abandoned_carts ac
        JOIN users u ON u.id = ac.user_id
        ${where}
@@ -284,6 +287,7 @@ export class AdminAbandonedCartsRepository {
       channel: row.price_mode === 'wholesale' ? 'B2B' : 'B2C',
       vendorNames: row.vendor_names || [],
       vendorReminderCount: row.vendor_reminder_count || 0,
+      topProducts: row.top_products || [],
       userId: row.user_id,
       userName: row.user_name,
       userPhone: row.user_phone,

@@ -55,6 +55,7 @@ describe('AbandonedCartsRepository.recordAbandonment', () => {
     mockClient.query
       .mockResolvedValueOnce(undefined) // BEGIN
       .mockResolvedValueOnce({ rows: [] }) // SELECT ... FOR UPDATE -> no existing row
+      .mockResolvedValueOnce({ rows: [] }) // SELECT recently RECOVERED episode to re-open -> none
       .mockResolvedValueOnce({ rows: [{ id: CART_ID }] }) // INSERT abandoned_carts RETURNING id
       .mockResolvedValueOnce(undefined) // INSERT abandoned_cart_events (DETECTED)
       .mockResolvedValueOnce(undefined) // DELETE abandoned_cart_items
