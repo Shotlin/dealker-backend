@@ -1,5 +1,8 @@
 import { query, getClient } from '../../config/database.js'
 import { signedUrl } from '../vendor-kyc-files/vendor-kyc-files.service.js'
+import { VendorsRepository } from '../vendors/vendors.repository.js'
+
+const vendorsRepo = new VendorsRepository()
 
 const err = (statusCode, message, code = 'KYC_ERROR') => Object.assign(new Error(message), { statusCode, code })
 
@@ -87,6 +90,12 @@ export const kycAdmin = {
         if (bad.length) throw err(409, `${bad.length} document(s) are not verified yet — verify them first, or approve with an override note.`, 'DOCS_UNVERIFIED')
       }
       if (override && !String(comments || '').trim()) throw err(400, 'Add a note explaining the override', 'VALIDATION_ERROR')
+      // Every listing hangs off the vendor's shop. Approving / activating / reinstating must leave a live shop behind,
+      // otherwise the vendor app says "Complete your KYC first" on a fully verified vendor.
+      if (['VERIFIED', 'ACTIVE'].includes(f.to)) {
+        const shop = await vendorsRepo.ensureShop(vendorId)
+        if (!shop.ok) throw err(422, shop.message, 'SHOP_PROFILE_INCOMPLETE')
+      }
       const active = ['ACTIVE', 'VERIFIED'].includes(f.to) ? f.to === 'ACTIVE' || v.is_active : false
       await client.query(`UPDATE vendors SET status = $2, is_active = $3, updated_at = NOW() WHERE id = $1`, [vendorId, f.to, f.to === 'ACTIVE'])
       await client.query(

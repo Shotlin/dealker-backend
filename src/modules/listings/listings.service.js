@@ -1,7 +1,9 @@
 import { query, getClient } from '../../config/database.js'
 import { QcService } from '../qc/qc.service.js'
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js'
+import { VendorsRepository } from '../vendors/vendors.repository.js'
 
+const vendorsRepo = new VendorsRepository()
 const qc = new QcService()
 const subscriptions = new SubscriptionsService()
 
@@ -166,7 +168,17 @@ export const listingsService = {
       if (scope.vendorId) {
         await subscriptions.assertCanList(scope.vendorId) // plan listing limit
         ownerType = 'VENDOR'; vendorId = scope.vendorId
-        const s = await client.query(`SELECT s.id FROM shops s JOIN vendors v ON v.id = s.vendor_id WHERE s.vendor_id = $1 AND s.is_active = true AND s.deleted_at IS NULL ORDER BY s.created_at LIMIT 1`, [vendorId])
+        const findShop = () => client.query(`SELECT s.id FROM shops s JOIN vendors v ON v.id = s.vendor_id WHERE s.vendor_id = $1 AND s.is_active = true AND s.deleted_at IS NULL ORDER BY s.created_at LIMIT 1`, [vendorId])
+        let s = await findShop()
+        if (!s.rows[0]) {
+          // An approved vendor whose shop was never created/activated (older approval paths) must not be told to redo KYC.
+          const st = (await client.query(`SELECT status FROM vendors WHERE id = $1 AND deleted_at IS NULL`, [vendorId])).rows[0]?.status
+          if (['VERIFIED', 'ACTIVE'].includes(st)) {
+            const made = await vendorsRepo.ensureShop(vendorId)
+            if (!made.ok) throw err(409, `${made.message} Complete your business profile (address and map location), then try again.`, 'SHOP_PROFILE_INCOMPLETE')
+            s = await findShop()
+          }
+        }
         if (!s.rows[0]) throw err(409, 'Your store is not active yet — complete KYC first', 'NO_ACTIVE_SHOP')
         shopId = s.rows[0].id
       } else if (input.ownerVendorId) {
