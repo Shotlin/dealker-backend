@@ -60,8 +60,8 @@ d('vendor listings — sales channels (real database)', () => {
     await expect(listings.create(base({ price: 1000 , sellB2c: false, sellB2b: false }), scope())).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: /at least one sales channel/ })
     await expect(listings.create(base({ sellB2c: false, sellB2b: true }), scope())).rejects.toMatchObject({ message: /Wholesale price is required/ })
     await expect(listings.create(base({ sellB2c: false, sellB2b: true, wholesalePrice: 100, moq: 50 }), scope())).rejects.toMatchObject({ message: /cannot exceed the stock/ })
-    await expect(listings.create(base({ price: 1000, sellB2b: true, wholesalePrice: 2000, moq: 2 }), scope())).rejects.toMatchObject({ message: /cannot be higher than the B2C/ })
-    await expect(listings.create(base({ sellB2b: true, wholesalePrice: 900, moq: 2 }), scope())).rejects.toMatchObject({ message: /Selling price is required/ })
+    await expect(listings.create(base({ price: 1000, sellB2c: true, sellB2b: true, wholesalePrice: 2000, moq: 2 }), scope())).rejects.toMatchObject({ message: /cannot be higher than the B2C/ })
+    await expect(listings.create(base({ sellB2c: true, sellB2b: true, wholesalePrice: 900, moq: 2 }), scope())).rejects.toMatchObject({ message: /Selling price is required/ })
   })
 
   it('a used lot may hold several units only when it is not sold to customers', async () => {

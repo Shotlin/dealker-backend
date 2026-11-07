@@ -9,6 +9,13 @@ const subscriptions = new SubscriptionsService()
 
 const CONDITIONS = ['NEW', 'OPEN_BOX', 'REFURBISHED', 'USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR']
 const USED = ['USED_LIKE_NEW', 'USED_GOOD', 'USED_FAIR']
+
+/**
+ * Is this listing sold to customers (B2C)? An explicit sellB2c always wins. When it is omitted, a wholesale listing
+ * (sellB2b: true) is B2B-only — B2C is something the vendor opts in to, never added on their behalf. A request
+ * with neither flag stays a plain retail listing.
+ */
+export const wantsB2c = (x) => (x.sellB2c !== undefined && x.sellB2c !== null ? x.sellB2c !== false : x.sellB2b !== true)
 const err = (statusCode, message, code = 'LISTING_ERROR') => Object.assign(new Error(message), { statusCode, code })
 const slugify = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 80)
 
@@ -119,7 +126,7 @@ export const listingsService = {
 
   /** Channel rules, checked against the merged (stored + incoming) listing so partial edits can't break them. */
   checkChannels(m, e) {
-    const b2c = m.sellB2c !== false
+    const b2c = wantsB2c(m)
     const b2b = m.sellB2b === true
     if (!b2c && !b2b) { e.push('Choose at least one sales channel (B2B or B2C)'); return }
     if (b2c && !(Number(m.price) > 0)) e.push('Selling price is required')
@@ -135,7 +142,7 @@ export const listingsService = {
 
   validate(input, { partial = false } = {}) {
     const e = []
-    const b2c = input.sellB2c !== false
+    const b2c = wantsB2c(input)
     const need = (k, label) => { if (!partial && (input[k] === undefined || input[k] === null || input[k] === '')) e.push(`${label} is required`) }
     need('name', 'Title'); need('categoryId', 'Category'); need('condition', 'Condition'); need('stock', 'Quantity')
     if (input.condition !== undefined && !CONDITIONS.includes(input.condition)) e.push('Invalid condition')
@@ -155,7 +162,7 @@ export const listingsService = {
 
   async create(input, scope) {
     this.validate(input)
-    const b2c = input.sellB2c !== false
+    const b2c = wantsB2c(input)
     const b2b = input.sellB2b === true
     // A B2B-only listing is stored with its wholesale price as the base price.
     const price = b2c ? Number(input.price) : Number(input.wholesalePrice)
