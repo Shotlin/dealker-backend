@@ -274,6 +274,10 @@ export class RefundRequestsService {
       logAdminActivity(actor.userId, 'CREATE_RETURN_REQUEST', 'refund_request', created.id, null, created, actor.ip)
     }
     publishRefundStatus(row, { io: this.fastify?.io, event: 'REFUND_REQUESTED' })
+    // Tell the sellers whose lines are affected (vendor app only, fire-and-forget).
+    import('../vendor-returns/vendor-returns.service.js')
+      .then((m) => m.notifyVendorsOfNewReturn(row, this.notifier))
+      .catch(() => {})
     return row
   }
 

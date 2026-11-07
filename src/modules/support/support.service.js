@@ -166,12 +166,14 @@ export const supportService = {
   },
 
   // ── Create ───────────────────────────────────────────────────────────
-  async create({ userId, subject, message, category = 'GENERAL', priority = 'NORMAL', orderId = null, refundRequestId = null, channel = 'APP', senderType = 'CUSTOMER', actorId = null, assignTo = null }) {
+  async create({ userId, subject, message, category = 'GENERAL', priority = 'NORMAL', orderId = null, refundRequestId = null, channel = 'APP', senderType = 'CUSTOMER', actorId = null, assignTo = null, verifiedOrder = false }) {
     const client = await getClient()
     try {
       await client.query('BEGIN')
       if (orderId) {
-        const o = await client.query(`SELECT 1 FROM orders WHERE id = $1 ${senderType === 'CUSTOMER' ? 'AND customer_id = $2' : ''}`, senderType === 'CUSTOMER' ? [orderId, userId] : [orderId])
+        // `verifiedOrder`: the caller (e.g. vendor returns) already proved this user may talk about the order.
+        const ownOnly = senderType === 'CUSTOMER' && !verifiedOrder
+        const o = await client.query(`SELECT 1 FROM orders WHERE id = $1 ${ownOnly ? 'AND customer_id = $2' : ''}`, ownOnly ? [orderId, userId] : [orderId])
         if (!o.rows[0]) throw httpError(404, 'Order not found', 'NOT_FOUND')
       }
       const { rows: seq } = await client.query(`SELECT nextval('support_ticket_seq') AS n`)
@@ -204,7 +206,7 @@ export const supportService = {
   async startFromContext({ orderId, refundRequestId, actorId }) {
     let userId; let subject; let category = 'ORDER'; let message; let oid = orderId || null
     if (refundRequestId) {
-      const ex = await query(`SELECT id FROM support_tickets WHERE refund_request_id = $1 AND status = ANY($2) LIMIT 1`, [refundRequestId, OPEN_STATUSES])
+      const ex = await query(`SELECT id FROM support_tickets WHERE refund_request_id = $1 AND status = ANY($2) AND channel <> 'VENDOR_APP' LIMIT 1`, [refundRequestId, OPEN_STATUSES])
       if (ex.rows[0]) return this.detail(ex.rows[0].id)
       const { rows } = await query(
         `SELECT r.customer_id, r.order_id, r.reason, o.order_number FROM refund_requests r JOIN orders o ON o.id = r.order_id WHERE r.id = $1`, [refundRequestId])

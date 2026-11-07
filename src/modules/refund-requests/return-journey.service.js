@@ -265,7 +265,7 @@ export class ReturnJourneyService {
     // The question goes into the return's chat so the team answers in one place.
     try {
       const support = await this.#support()
-      const { rows: [t] } = await query(`SELECT id FROM support_tickets WHERE refund_request_id = $1 ORDER BY created_at LIMIT 1`, [id])
+      const { rows: [t] } = await query(`SELECT id FROM support_tickets WHERE refund_request_id = $1 AND channel <> 'VENDOR_APP' ORDER BY created_at LIMIT 1`, [id])
       if (t) await support.addMessage(t.id, { body: text, sender: { type: 'CUSTOMER', id: userId } })
       else await support.create({ userId, subject: `Return ${r.order_number}: price question`, message: text, category: 'RETURN_REFUND', orderId: r.order_id, refundRequestId: id })
     } catch (err) {

@@ -111,8 +111,8 @@ export const refundCaseService = {
 
     // Every chat about this return (or this order). Staff see internal notes too.
     const ticketRows = (await query(
-      `SELECT t.id, t.ticket_number, t.subject, t.status, t.created_at, t.refund_request_id, a.name AS assignee_name
-         FROM support_tickets t LEFT JOIN users a ON a.id = t.assigned_to
+      `SELECT t.id, t.ticket_number, t.subject, t.status, t.created_at, t.refund_request_id, t.channel, a.name AS assignee_name, ou.name AS owner_name
+         FROM support_tickets t LEFT JOIN users a ON a.id = t.assigned_to LEFT JOIN users ou ON ou.id = t.user_id
         WHERE t.refund_request_id = $1 OR (t.order_id = $2 AND t.refund_request_id IS NULL)
         ORDER BY t.created_at`, [id, r.order_id])).rows
     const msgRows = ticketRows.length ? (await query(
@@ -122,8 +122,11 @@ export const refundCaseService = {
     const conversations = ticketRows.map((t) => ({
       id: t.id, number: t.ticket_number, subject: t.subject, status: t.status, started_at: t.created_at, assignee: t.assignee_name,
       linked_to_request: t.refund_request_id === id,
+      // A ticket opened from the vendor app is the SELLER's chat, not the customer's.
+      by_seller: t.channel === 'VENDOR_APP',
       messages: msgRows.filter((m) => m.ticket_id === t.id).map((m) => ({
-        id: m.id, from: m.sender_type, name: m.sender_type === 'CUSTOMER' ? r.customer_name : m.sender_type === 'SYSTEM' ? 'Dealker' : m.sender_name,
+        id: m.id, from: m.sender_type,
+        name: m.sender_type === 'CUSTOMER' ? (t.channel === 'VENDOR_APP' ? `${t.owner_name || 'Seller'} (seller)` : r.customer_name) : m.sender_type === 'SYSTEM' ? 'Dealker' : m.sender_name,
         body: m.body, internal: m.is_internal, attachments: Array.isArray(m.attachments) ? m.attachments : [], at: m.created_at,
       })),
     }))
@@ -152,7 +155,7 @@ export const refundCaseService = {
       const url = typeof a === 'string' ? a : a?.url
       if (!url) continue
       evidence.push({
-        id: `chat-${m.id}-${url.slice(-12)}`, origin: 'CHAT', side: m.from === 'CUSTOMER' ? 'CUSTOMER' : 'TEAM', kind: guessKind(url, a?.type || a?.mime), url,
+        id: `chat-${m.id}-${url.slice(-12)}`, origin: 'CHAT', side: m.from === 'CUSTOMER' ? (c.by_seller ? 'SELLER' : 'CUSTOMER') : 'TEAM', kind: guessKind(url, a?.type || a?.mime), url,
         title: a?.name || `File sent in chat by ${m.name ?? 'someone'}`, note: `Sent in chat ${c.number}.`, review: 'UNREVIEWED', added_by: m.name, added_at: m.at, removable: false,
       })
     }
@@ -171,7 +174,7 @@ export const refundCaseService = {
 
     // ── Checklist ────────────────────────────────────────────────────────
     const calls = events.filter((e) => e.type === 'CALL')
-    const agentChat = conversations.some((c) => c.messages.some((m) => m.from === 'AGENT' && !m.internal))
+    const agentChat = conversations.some((c) => !c.by_seller && c.messages.some((m) => m.from === 'AGENT' && !m.internal))
     const sellers = overview?.sellers ?? []
     const available = {
       spoke_customer: agentChat || calls.some((e) => e.party === 'CUSTOMER'),
@@ -197,8 +200,8 @@ export const refundCaseService = {
     timeline.push({ id: 'req', at: r.created_at, group: 'CASE', party: 'CUSTOMER', title: r.source === 'ADMIN' ? 'Our team started this refund request' : 'Customer asked for a refund', body: r.reason, actor: r.source === 'ADMIN' ? null : r.customer_name, internal: false, type: 'REQUEST_CREATED' })
     for (const e of events) timeline.push({ id: e.id, at: e.created_at, group: 'CASE', party: e.party, title: e.title, body: e.body, actor: e.actor_name, internal: true, type: e.type, meta: e.metadata })
     for (const c of conversations) for (const m of c.messages) timeline.push({
-      id: `m-${m.id}`, at: m.at, group: 'CHAT', party: m.from === 'CUSTOMER' ? 'CUSTOMER' : 'TEAM',
-      title: m.internal ? `${m.name ?? 'Team member'} left a private note in chat` : m.from === 'CUSTOMER' ? `${m.name ?? 'The customer'} wrote in chat` : m.from === 'SYSTEM' ? 'Automatic chat message' : `${m.name ?? 'Team member'} replied in chat`,
+      id: `m-${m.id}`, at: m.at, group: 'CHAT', party: m.from === 'CUSTOMER' ? (c.by_seller ? 'SELLER' : 'CUSTOMER') : 'TEAM',
+      title: m.internal ? `${m.name ?? 'Team member'} left a private note in chat` : m.from === 'CUSTOMER' ? `${m.name ?? (c.by_seller ? 'The seller' : 'The customer')} wrote in chat` : m.from === 'SYSTEM' ? 'Automatic chat message' : `${m.name ?? 'Team member'} replied in chat`,
       body: m.body, actor: m.name, internal: m.internal || m.from === 'SYSTEM', type: 'CHAT',
     })
     const decided = events.some((e) => e.type === 'APPROVED' || e.type === 'REJECTED')

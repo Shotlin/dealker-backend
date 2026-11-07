@@ -619,6 +619,9 @@ export const buildApp = async () => {
   // Vendor abandoned carts — a vendor's own slice of idle B2C/B2B carts + targeted reminders
   const { default: vendorAbandonedCartsRoutes } = await import("./modules/vendor-abandoned-carts/vendor-abandoned-carts.routes.js");
   await app.register(vendorAbandonedCartsRoutes, { prefix: "/api/v1/manage/abandoned-carts" });
+  // Customer returns on a vendor's own order lines (view, answer, chat with Dealker Support)
+  const { default: vendorReturnsRoutes } = await import("./modules/vendor-returns/vendor-returns.routes.js");
+  await app.register(vendorReturnsRoutes, { prefix: "/api/v1/manage/returns" });
 
   // B2B abandoned carts + follow-ups
   const { adminAbandonedB2bRoutes } = await import("./modules/abandoned-b2b/abandoned-b2b.routes.js");
