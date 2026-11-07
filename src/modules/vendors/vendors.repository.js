@@ -13,8 +13,9 @@ export class VendorsRepository {
    * @param {string} id
    * @returns {Promise<object|null>}
    */
-  async findById(id) {
-    const { rows } = await query(
+  async findById(id, db = null) {
+    const run = db ? (sql, params) => db.query(sql, params) : query
+    const { rows } = await run(
       `SELECT v.*,
               row_to_json(vp.*) AS profile,
               row_to_json(vs.*) AS settings
@@ -228,14 +229,17 @@ export class VendorsRepository {
    * and every listing hang off the shop). Creates it from the business profile the vendor filled in.
    * Returns { ok: true } or { ok: false, message } when the profile is not complete enough yet.
    */
-  async ensureShop(vendorId) {
-    const { rows: existing } = await query(
+  async ensureShop(vendorId, db = null) {
+    // `db` = the caller's open transaction client. Required when the caller holds a lock on the vendors row
+    // (FOR UPDATE): the shop INSERT needs a share lock on that row from ANOTHER connection and would wait forever.
+    const run = db ? (sql, params) => db.query(sql, params) : query
+    const { rows: existing } = await run(
       `SELECT id FROM shops WHERE vendor_id = $1 AND is_platform = false AND deleted_at IS NULL LIMIT 1`, [vendorId])
     if (existing[0]) {
-      await query(`UPDATE shops SET is_active = true, is_verified = true, updated_at = NOW() WHERE id = $1`, [existing[0].id])
+      await run(`UPDATE shops SET is_active = true, is_verified = true, updated_at = NOW() WHERE id = $1`, [existing[0].id])
       return { ok: true, shopId: existing[0].id }
     }
-    const vendor = await this.findById(vendorId)
+    const vendor = await this.findById(vendorId, db)
     const p = vendor?.profile || {}
     const missing = []
     if (!String(p.address_line1 || '').trim()) missing.push('address')
@@ -248,7 +252,7 @@ export class VendorsRepository {
     }
     const base = String(vendor.slug || 'shop').slice(0, 60)
     const suffix = Math.random().toString(16).slice(2, 8)
-    const { rows } = await query(
+    const { rows } = await run(
       `INSERT INTO shops (name, slug, branch_code, phone, email, address_line1, address_line2, city, state, pincode,
                           lat, lng, delivery_radius_km, is_active, is_verified, vendor_id, gst_number, pan_number)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,25,true,true,$13,$14,$15)

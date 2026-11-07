@@ -43,7 +43,7 @@ describe('listingsService.create — vendor shop provisioning', () => {
     db({ shopRows: [[], [{ id: 'shop-1' }]], status: 'ACTIVE' })
     h.ensureShop.mockResolvedValue({ ok: true, shopId: 'shop-1' })
     await expect(listingsService.create(input, { vendorId: VENDOR })).rejects.toMatchObject({ reached: true })
-    expect(h.ensureShop).toHaveBeenCalledWith(VENDOR)
+    expect(h.ensureShop).toHaveBeenCalledWith(VENDOR, h.client)
   })
 
   it('a vendor that already has an active shop never triggers provisioning', async () => {
@@ -83,7 +83,7 @@ describe('kycAdmin.review — approval leaves a live shop behind', () => {
 
     h.ensureShop.mockResolvedValue({ ok: true, shopId: 's1' })
     await svc.review(VENDOR, { action: 'APPROVE' }, 'admin-1')
-    expect(h.ensureShop).toHaveBeenLastCalledWith(VENDOR)
+    expect(h.ensureShop).toHaveBeenLastCalledWith(VENDOR, h.client)
     expect(h.client.query.mock.calls.some(([s]) => /UPDATE vendors SET status/.test(s))).toBe(true)
   })
 

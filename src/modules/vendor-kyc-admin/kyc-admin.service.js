@@ -93,7 +93,7 @@ export const kycAdmin = {
       // Every listing hangs off the vendor's shop. Approving / activating / reinstating must leave a live shop behind,
       // otherwise the vendor app says "Complete your KYC first" on a fully verified vendor.
       if (['VERIFIED', 'ACTIVE'].includes(f.to)) {
-        const shop = await vendorsRepo.ensureShop(vendorId)
+        const shop = await vendorsRepo.ensureShop(vendorId, client)
         if (!shop.ok) throw err(422, shop.message, 'SHOP_PROFILE_INCOMPLETE')
       }
       const active = ['ACTIVE', 'VERIFIED'].includes(f.to) ? f.to === 'ACTIVE' || v.is_active : false

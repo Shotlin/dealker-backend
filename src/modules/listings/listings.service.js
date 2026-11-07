@@ -174,7 +174,7 @@ export const listingsService = {
           // An approved vendor whose shop was never created/activated (older approval paths) must not be told to redo KYC.
           const st = (await client.query(`SELECT status FROM vendors WHERE id = $1 AND deleted_at IS NULL`, [vendorId])).rows[0]?.status
           if (['VERIFIED', 'ACTIVE'].includes(st)) {
-            const made = await vendorsRepo.ensureShop(vendorId)
+            const made = await vendorsRepo.ensureShop(vendorId, client)
             if (!made.ok) throw err(409, `${made.message} Complete your business profile (address and map location), then try again.`, 'SHOP_PROFILE_INCOMPLETE')
             s = await findShop()
           }
