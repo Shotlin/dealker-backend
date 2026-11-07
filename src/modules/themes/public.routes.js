@@ -135,6 +135,8 @@ export default async function publicThemeRoutes(fastify) {
             enum: ['mobile', 'mobile_part', 'accessories', 'electronics', 'repellents', 'marketplace', 'deals', 'brand_store', 'new_arrivals'],
           },
           priceMode: { type: 'string', enum: ['retail', 'wholesale'] },
+          // New app builds send compact=1 to receive each distinct product once (product_pool).
+          compact: { type: 'string', enum: ['0', '1', 'true', 'false'] },
         },
       },
       response: {

@@ -6,6 +6,14 @@ import { query } from '../../config/database.js'
 import { redis } from '../../config/redis.js'
 import { success, error } from '../../utils/apiResponse.js'
 import { logger } from '../../config/logger.js'
+import { readThrough } from '../../utils/swr-cache.js'
+import {
+  compactManifest,
+  etagMatches,
+  memoizeByEtag,
+  quoteEtag,
+  slimManifestProducts,
+} from './manifest-payload.js'
 import {
   getActiveThemeCacheKey,
   getSectionPublicCacheKey,
@@ -23,6 +31,8 @@ import {
 } from '../products/products.repository.js'
 
 const CACHE_TTL = 300
+// How long an expired entry may still be served (while one background refresh rebuilds it).
+const CACHE_STALE_TTL = 1200
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PHASE 5B: Safe mobile home payload caps.
@@ -154,12 +164,13 @@ export class PublicThemeController {
       const parsed = JSON.parse(cached)
       const etag = parsed._etag
 
-      if (clientETag && clientETag === etag) {
+      if (etagMatches(clientETag, etag)) {
+        reply.header('ETag', quoteEtag(etag))
         reply.code(304)
         return
       }
 
-      reply.header('ETag', etag)
+      reply.header('ETag', quoteEtag(etag))
       reply.header('Cache-Control', 'private, max-age=60')
       return success(parsed.data, 'Tab themes')
     }
@@ -185,12 +196,13 @@ export class PublicThemeController {
       CACHE_TTL
     )
 
-    if (clientETag && clientETag === etag) {
+    if (etagMatches(clientETag, etag)) {
+      reply.header('ETag', quoteEtag(etag))
       reply.code(304)
       return
     }
 
-    reply.header('ETag', etag)
+    reply.header('ETag', quoteEtag(etag))
     reply.header('Cache-Control', 'private, max-age=60')
     return success(responseData, 'Tab themes')
   }
@@ -230,65 +242,78 @@ export class PublicThemeController {
 
     const allocatedShopIds = await this._resolveAllocatedShopIds(request)
     const cacheKey = `${getTabHomeCacheKey(storeKey, tabKey)}:${shopBucketKey(allocatedShopIds)}:${priceMode}`
-    const cached = await redis.get(cacheKey)
-    if (cached) {
-      return success(JSON.parse(cached), 'Tab home content')
-    }
+    const { value: responseData } = await readThrough({
+      key: cacheKey,
+      freshSeconds: CACHE_TTL,
+      hardSeconds: CACHE_STALE_TTL,
+      build: () => this._buildTabHomeContent({ storeKey, tabKey, allocatedShopIds, priceMode }),
+    })
 
-    const tab = await getTabDefinition(storeKey, tabKey)
-    if (!tab) {
+    if (!responseData) {
       reply.code(404)
       return error('Tab not found', 'NOT_FOUND')
     }
+    return success(responseData, 'Tab home content')
+  }
+
+  /** Builds the cacheable tab-home payload (or null when the tab does not exist). */
+  async _buildTabHomeContent({ storeKey, tabKey, allocatedShopIds, priceMode }) {
+    const tab = await getTabDefinition(storeKey, tabKey)
+    if (!tab) return null
 
     const merchConfig = tab.merch_config || {}
 
     // PHASE 5B: Each resolveSectionProducts call gets the dashboard-configured
     // limit clamped to HOME_CAPS.* — regardless of what the dashboard stored.
-    const featuredProducts = await resolveSectionProducts(
-      merchConfig.featured,
-      () => getFeaturedProducts(HOME_CAPS.featured, allocatedShopIds, priceMode),
-      HOME_CAPS.featured,
-      allocatedShopIds,
-      priceMode
-    )
-    const dealProducts = await resolveSectionProducts(
-      merchConfig.deals,
-      () => getDealProducts(HOME_CAPS.deals, allocatedShopIds, priceMode),
-      HOME_CAPS.deals,
-      allocatedShopIds,
-      priceMode
-    )
-    const trendingProducts = await resolveSectionProducts(
-      merchConfig.trending,
-      () => getTrendingProducts(HOME_CAPS.trending, allocatedShopIds, priceMode),
-      HOME_CAPS.trending,
-      allocatedShopIds,
-      priceMode
-    )
-    const seasonalProducts = await resolveSectionProducts(
-      merchConfig.seasonal_mosaic,
-      async () => mergeUniqueProducts([
-        await getDealProducts(HOME_CAPS.seasonal, allocatedShopIds, priceMode),
-        await getFeaturedProducts(HOME_CAPS.seasonal, allocatedShopIds, priceMode),
-        await getTrendingProducts(HOME_CAPS.seasonal, allocatedShopIds, priceMode),
-      ]).slice(0, HOME_CAPS.seasonal),
-      HOME_CAPS.seasonal,
-      allocatedShopIds,
-      priceMode
-    )
-    const categorySections = await resolveCategorySections(
-      merchConfig.category_rails,
-      async () => getDefaultCategorySections(
-        HOME_CAPS.defaultRailCount,
-        HOME_CAPS.defaultRailItems,
-        allocatedShopIds,
-        priceMode
-      ),
-      HOME_CAPS.categoryRail,
-      allocatedShopIds,
-      priceMode
-    )
+    // The five lookups are independent, so they run together instead of one
+    // after another (this is the slow, cache-miss path).
+    const [featuredProducts, dealProducts, trendingProducts, seasonalProducts, categorySections] =
+      await Promise.all([
+        resolveSectionProducts(
+          merchConfig.featured,
+          () => getFeaturedProducts(HOME_CAPS.featured, allocatedShopIds, priceMode),
+          HOME_CAPS.featured,
+          allocatedShopIds,
+          priceMode
+        ),
+        resolveSectionProducts(
+          merchConfig.deals,
+          () => getDealProducts(HOME_CAPS.deals, allocatedShopIds, priceMode),
+          HOME_CAPS.deals,
+          allocatedShopIds,
+          priceMode
+        ),
+        resolveSectionProducts(
+          merchConfig.trending,
+          () => getTrendingProducts(HOME_CAPS.trending, allocatedShopIds, priceMode),
+          HOME_CAPS.trending,
+          allocatedShopIds,
+          priceMode
+        ),
+        resolveSectionProducts(
+          merchConfig.seasonal_mosaic,
+          async () => mergeUniqueProducts(await Promise.all([
+            getDealProducts(HOME_CAPS.seasonal, allocatedShopIds, priceMode),
+            getFeaturedProducts(HOME_CAPS.seasonal, allocatedShopIds, priceMode),
+            getTrendingProducts(HOME_CAPS.seasonal, allocatedShopIds, priceMode),
+          ])).slice(0, HOME_CAPS.seasonal),
+          HOME_CAPS.seasonal,
+          allocatedShopIds,
+          priceMode
+        ),
+        resolveCategorySections(
+          merchConfig.category_rails,
+          async () => getDefaultCategorySections(
+            HOME_CAPS.defaultRailCount,
+            HOME_CAPS.defaultRailItems,
+            allocatedShopIds,
+            priceMode
+          ),
+          HOME_CAPS.categoryRail,
+          allocatedShopIds,
+          priceMode
+        ),
+      ])
 
     const responseData = {
       store_key: storeKey,
@@ -328,8 +353,7 @@ export class PublicThemeController {
     // Only logs at debug level — production log level (info/warn) is unaffected.
     _logHomePayload(storeKey, tabKey, responseData)
 
-    await redis.set(cacheKey, JSON.stringify(responseData), 'EX', CACHE_TTL)
-    return success(responseData, 'Tab home content')
+    return responseData
   }
 
   async recordAnalytics(request, reply) {
@@ -380,6 +404,10 @@ export class PublicThemeController {
     const priceMode = request.query?.priceMode === 'wholesale'
       ? 'wholesale'
       : 'retail'
+    // Opt-in (new app builds): send each distinct product once in `product_pool` and
+    // reference it by key from the sections. Old builds never pass it and get the
+    // exact legacy shape.
+    const compact = ['1', 'true'].includes(`${request.query?.compact ?? ''}`)
 
     if (!tabKey) {
       reply.code(400)
@@ -387,29 +415,37 @@ export class PublicThemeController {
     }
 
     const allocatedShopIds = await this._resolveAllocatedShopIds(request)
-    const clientETag = request.headers['if-none-match']
     const cacheKey = `${getSectionPublicCacheKey(storeKey, tabKey)}:${shopBucketKey(allocatedShopIds)}:${priceMode}`
 
-    const cached = await redis.get(cacheKey)
-    if (cached) {
-      const parsed = JSON.parse(cached)
-      const etag = parsed._etag
+    const { value: entry } = await readThrough({
+      key: cacheKey,
+      freshSeconds: CACHE_TTL,
+      hardSeconds: CACHE_STALE_TTL,
+      build: () => this._buildSectionManifest({ storeKey, shopId, tabKey, allocatedShopIds, priceMode }),
+    })
 
-      if (clientETag && clientETag === etag) {
-        reply.code(304)
-        return
-      }
-
-      reply.header('ETag', etag)
-      reply.header('Cache-Control', 'private, max-age=60')
-      return success(parsed.data, 'Section manifest')
-    }
-
-    const tab = await getTabDefinition(storeKey, tabKey)
-    if (!tab) {
+    if (!entry) {
       reply.code(404)
       return error('Tab not found', 'NOT_FOUND')
     }
+
+    // The compact body is derived from the same cached manifest, so it gets its own etag.
+    const etag = compact ? `${entry._etag}-c` : entry._etag
+    reply.header('ETag', quoteEtag(etag))
+    if (etagMatches(request.headers['if-none-match'], etag)) {
+      reply.code(304)
+      return
+    }
+
+    reply.header('Cache-Control', 'private, max-age=60')
+    const data = compact ? memoizeByEtag(etag, () => compactManifest(entry.data)) : entry.data
+    return success(data, 'Section manifest')
+  }
+
+  /** Builds the cacheable section manifest (or null when the tab does not exist). */
+  async _buildSectionManifest({ storeKey, shopId, tabKey, allocatedShopIds, priceMode }) {
+    const tab = await getTabDefinition(storeKey, tabKey)
+    if (!tab) return null
 
     const { rows } = await query(
       `SELECT
@@ -438,30 +474,15 @@ export class PublicThemeController {
       rows.map((section) => resolveManifestSection(section, allocatedShopIds, priceMode))
     )
 
-    const responseData = {
+    const responseData = slimManifestProducts({
       tab_key: tabKey,
       store_key: storeKey,
       // See getTabHomeContent: lets clients verify the response's shop scope.
       shop_id: shopId,
       sections: resolvedSections,
-    }
+    })
     const etag = createHash('md5').update(JSON.stringify(responseData)).digest('hex')
-
-    await redis.set(
-      cacheKey,
-      JSON.stringify({ _etag: etag, data: responseData }),
-      'EX',
-      CACHE_TTL
-    )
-
-    if (clientETag && clientETag === etag) {
-      reply.code(304)
-      return
-    }
-
-    reply.header('ETag', etag)
-    reply.header('Cache-Control', 'private, max-age=60')
-    return success(responseData, 'Section manifest')
+    return { _etag: etag, data: responseData }
   }
 }
 
@@ -783,11 +804,11 @@ async function getImplicitSectionProducts(section, limit, allocatedShopIds, pric
     case 'trending_products':
       return getTrendingProducts(sectionLimit, allocatedShopIds, priceMode)
     case 'seasonal_mosaic':
-      return mergeUniqueProducts([
-        await getDealProducts(sectionLimit, allocatedShopIds, priceMode),
-        await getFeaturedProducts(sectionLimit, allocatedShopIds, priceMode),
-        await getTrendingProducts(sectionLimit, allocatedShopIds, priceMode),
-      ]).slice(0, sectionLimit)
+      return mergeUniqueProducts(await Promise.all([
+        getDealProducts(sectionLimit, allocatedShopIds, priceMode),
+        getFeaturedProducts(sectionLimit, allocatedShopIds, priceMode),
+        getTrendingProducts(sectionLimit, allocatedShopIds, priceMode),
+      ])).slice(0, sectionLimit)
     case 'deal_of_day':
       return getDealProducts(Math.min(sectionLimit, 5), allocatedShopIds, priceMode)
     case 'recent_recommended':
@@ -798,11 +819,11 @@ async function getImplicitSectionProducts(section, limit, allocatedShopIds, pric
     case 'category_product_grid':
     case 'product_carousel':
     case 'arched_product_showcase':
-      return mergeUniqueProducts([
-        await getFeaturedProducts(sectionLimit, allocatedShopIds, priceMode),
-        await getDealProducts(sectionLimit, allocatedShopIds, priceMode),
-        await getTrendingProducts(sectionLimit, allocatedShopIds, priceMode),
-      ]).slice(0, sectionLimit)
+      return mergeUniqueProducts(await Promise.all([
+        getFeaturedProducts(sectionLimit, allocatedShopIds, priceMode),
+        getDealProducts(sectionLimit, allocatedShopIds, priceMode),
+        getTrendingProducts(sectionLimit, allocatedShopIds, priceMode),
+      ])).slice(0, sectionLimit)
     default:
       return []
   }
@@ -933,11 +954,11 @@ async function resolveStealDealsConfig(config, allocatedShopIds, priceMode) {
         (byId.size === 0 && chips.length === 0 && pinnedIds.length === 0 && !tabRules && !tabDeal) ||
         (tab.auto_fill === true && byId.size < STEAL_DEALS_TAB_CAP)
       ) {
-        const pool = mergeUniqueProducts([
-          await getTrendingProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
-          await getDealProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
-          await getFeaturedProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
-        ])
+        const pool = mergeUniqueProducts(await Promise.all([
+          getTrendingProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
+          getDealProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
+          getFeaturedProducts(STEAL_DEALS_TAB_CAP, allocatedShopIds, priceMode),
+        ]))
         pool.forEach((p) => tag(p, p.category_id))
       }
 
@@ -1146,7 +1167,7 @@ export async function getProductsByCategoryIds(categoryIds, limit, excludeIds = 
   return withCardFields(rows)
 }
 
-async function getFeaturedProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
+async function loadFeaturedProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
   const params = []
   const visibility = buildCustomerVisibilitySnippet(allocatedShopIds, params, params.length + 1)
   const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx, priceMode)
@@ -1212,7 +1233,7 @@ async function getFeaturedProducts(limit, allocatedShopIds = null, priceMode = '
   return withCardFields(rows)
 }
 
-async function getDealProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
+async function loadDealProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
   const params = []
   const visibility = buildCustomerVisibilitySnippet(allocatedShopIds, params, params.length + 1)
   const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx, priceMode)
@@ -1279,7 +1300,7 @@ async function getDealProducts(limit, allocatedShopIds = null, priceMode = 'reta
   return withCardFields(rows)
 }
 
-async function getTrendingProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
+async function loadTrendingProducts(limit, allocatedShopIds = null, priceMode = 'retail') {
   const params = []
   const visibility = buildCustomerVisibilitySnippet(allocatedShopIds, params, params.length + 1)
   const shopPrice = buildShopPriceJoin(allocatedShopIds, params, visibility.nextIdx, priceMode)
@@ -1344,6 +1365,36 @@ async function getTrendingProducts(limit, allocatedShopIds = null, priceMode = '
   return withCardFields(rows)
 }
 
+// The manifest builder asks for the same featured / deals / trending feeds from many
+// sections at once (each with the same limit). Share one in-flight/just-finished lookup
+// per (feed, limit, shop bucket, price mode) so each distinct query runs once per build.
+// The window is tiny (2 s) so it only dedupes within a build; the 300 s Redis cache above
+// remains the real cache.
+const FEED_MEMO_TTL_MS = 2000
+const feedMemo = new Map()
+
+function memoizedFeed(kind, limit, allocatedShopIds, priceMode, load) {
+  const key = `${kind}|${limit}|${shopBucketKey(allocatedShopIds)}|${priceMode}`
+  const now = Date.now()
+  const hit = feedMemo.get(key)
+  if (hit && now - hit.at < FEED_MEMO_TTL_MS) return hit.promise.then((rows) => [...rows])
+
+  const promise = load()
+  promise.catch(() => feedMemo.delete(key))
+  feedMemo.set(key, { at: now, promise })
+  if (feedMemo.size > 200) {
+    for (const [k, v] of feedMemo) if (now - v.at >= FEED_MEMO_TTL_MS) feedMemo.delete(k)
+  }
+  return promise.then((rows) => [...rows])
+}
+
+const getFeaturedProducts = (limit, allocatedShopIds = null, priceMode = 'retail') =>
+  memoizedFeed('featured', limit, allocatedShopIds, priceMode, () => loadFeaturedProducts(limit, allocatedShopIds, priceMode))
+const getDealProducts = (limit, allocatedShopIds = null, priceMode = 'retail') =>
+  memoizedFeed('deals', limit, allocatedShopIds, priceMode, () => loadDealProducts(limit, allocatedShopIds, priceMode))
+const getTrendingProducts = (limit, allocatedShopIds = null, priceMode = 'retail') =>
+  memoizedFeed('trending', limit, allocatedShopIds, priceMode, () => loadTrendingProducts(limit, allocatedShopIds, priceMode))
+
 async function getDefaultCategorySections(limitSections, itemsPerSection, allocatedShopIds = null, priceMode = 'retail') {
   const { rows: categories } = await query(
     `SELECT
@@ -1365,19 +1416,20 @@ async function getDefaultCategorySections(limitSections, itemsPerSection, alloca
   )
 
   const perRail = itemsPerSection ?? HOME_CAPS.defaultRailItems
-  const sections = []
-  for (const category of categories) {
-    // PHASE 5B: use configurable per-rail cap.
-    const products = await getProductsByCategoryIds([category.id], perRail, [], allocatedShopIds, priceMode)
-    if (products.length === 0) continue
-    sections.push({
+  // PHASE 5B: use configurable per-rail cap. Rails load together; Promise.all keeps their order.
+  const rails = await Promise.all(
+    categories.map(async (category) => ({
+      category,
+      products: await getProductsByCategoryIds([category.id], perRail, [], allocatedShopIds, priceMode),
+    }))
+  )
+  return rails
+    .filter(({ products }) => products.length > 0)
+    .map(({ category, products }) => ({
       category_id: category.id,
       title: category.name,
       products,
-    })
-  }
-
-  return sections
+    }))
 }
 
 async function getCategoryName(categoryId) {

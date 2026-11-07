@@ -2,11 +2,10 @@ import fp from 'fastify-plugin'
 import fjwt from '@fastify/jwt'
 import cookie from '@fastify/cookie'
 import { env } from '../config/env.js'
-import { query } from '../config/database.js'
 import { ERROR_CODES, HTTP_STATUS } from '../constants/errors.js'
 import { logger } from '../config/logger.js'
 import { ROLE_PERMISSIONS } from '../utils/permissions.js'
-import { isSessionActive } from '../utils/session.js'
+import { loadAuthContext, stampLastActive } from '../utils/auth-context.js'
 
 /**
  * Auth plugin — registers JWT + Cookie support
@@ -47,24 +46,14 @@ async function authPlugin(fastify) {
         })
       }
 
-      // Single PK lookup fetches both gates in one round-trip.
-      const { rows } = await query(
-        'SELECT is_blocked, session_version, platform_role FROM users WHERE id = $1 LIMIT 1',
-        [userId]
-      )
+      // ONE statement answers the blocked / session_version / device-session gates, and its answer is shared
+      // for a few seconds (see utils/auth-context.js) — a 15-request screen open costs one lookup, not 45.
+      const sessionId = request.user.sessionId || request.user.session_id || null
+      const ctx = await loadAuthContext(userId, sessionId)
+      const rows = ctx && ctx.found !== false ? [ctx] : [] // found === false only when the user row is missing
 
-      // Daily-active-customer stamp — fire-and-forget
-      try {
-        query(
-          `UPDATE users SET last_active_at = NOW()
-           WHERE id = $1 AND (last_active_at IS NULL OR last_active_at < NOW() - INTERVAL '10 minutes')`,
-          [userId]
-        ).catch((err) => {
-          logger.warn({ err: err.message, userId }, 'last_active_at stamp failed (non-critical)')
-        })
-      } catch (err) {
-        logger.warn({ err: err.message, userId }, 'last_active_at stamp failed (non-critical)')
-      }
+      // Daily-active-customer stamp — fire-and-forget, at most once per 10 min per user
+      stampLastActive(userId)
 
       // ── 1. Blocked-account gate ─────────────────────────────────
       if (rows.length > 0 && rows[0].is_blocked) {
@@ -95,16 +84,12 @@ async function authPlugin(fastify) {
       }
 
       // ── 3. Device session revocation gate ──────────────────────
-      const sessionId = request.user.sessionId || request.user.session_id || null
-      if (sessionId) {
-        const active = await isSessionActive(sessionId)
-        if (!active) {
-          return reply.code(401).send({
-            success: false,
-            message: 'Session has been revoked or expired',
-            code: ERROR_CODES.SESSION_INVALID,
-          })
-        }
+      if (sessionId && !ctx?.session_active) {
+        return reply.code(401).send({
+          success: false,
+          message: 'Session has been revoked or expired',
+          code: ERROR_CODES.SESSION_INVALID,
+        })
       }
 
       // ── 4. Request Context Attachment (Blueprint §05.1) ────────

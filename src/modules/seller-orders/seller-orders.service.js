@@ -59,7 +59,9 @@ export class SellerOrdersService {
     const offset = (Math.max(1, page) - 1) * limit
     params.push(limit)
     params.push(offset)
-    const { rows } = await query(
+    // List page and total are independent: fetch them together (one round-trip of latency, not two).
+    const [{ rows }, { rows: count }] = await Promise.all([
+      query(
       `SELECT so.id, so.seller_order_number, so.order_id, so.vendor_id, so.shop_id,
               so.status, so.fulfilment_status, so.item_subtotal, so.seller_discount,
               so.platform_discount, so.commission_rate, so.commission_amount,
@@ -78,14 +80,15 @@ export class SellerOrdersService {
         ORDER BY so.created_at DESC
         LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
-    )
-    const { rows: count } = await query(
-      `SELECT COUNT(*) AS total
-         FROM seller_orders so
-         JOIN orders o ON o.id = so.order_id
-         ${whereSql}`,
-      params.slice(0, -2)
-    )
+      ),
+      query(
+        `SELECT COUNT(*) AS total
+           FROM seller_orders so
+           JOIN orders o ON o.id = so.order_id
+           ${whereSql}`,
+        params.slice(0, -2)
+      ),
+    ])
     return { data: rows, pagination: { page: Number(page), limit, total: Number(count[0]?.total || 0) } }
   }
 
@@ -110,18 +113,17 @@ export class SellerOrdersService {
       params
     )
     if (!rows[0]) return null
-    const { rows: items } = await query(
-      `SELECT oi.*, p.thumbnail, p.slug
-         FROM order_items oi
-         LEFT JOIN products p ON p.id = oi.product_id
-        WHERE oi.seller_order_id = $1
-        ORDER BY oi.created_at`,
-      [id]
-    )
-    const { rows: shipments } = await query(
-      `SELECT * FROM shipments WHERE seller_order_id = $1 ORDER BY created_at DESC`,
-      [id]
-    )
+    const [{ rows: items }, { rows: shipments }] = await Promise.all([
+      query(
+        `SELECT oi.*, p.thumbnail, p.slug
+           FROM order_items oi
+           LEFT JOIN products p ON p.id = oi.product_id
+          WHERE oi.seller_order_id = $1
+          ORDER BY oi.created_at`,
+        [id]
+      ),
+      query(`SELECT * FROM shipments WHERE seller_order_id = $1 ORDER BY created_at DESC`, [id]),
+    ])
     return { ...stripInvoicePath(rows[0]), items, shipment: shipments[0] || null }
   }
 

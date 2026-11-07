@@ -77,9 +77,36 @@ export async function commissionFor(sellerVendorId, client = { query }) {
   return d.rows[0] ? Number(d.rows[0].value) : 10
 }
 
-async function expireStale() {
-  await query(`UPDATE b2b_requirements SET status='EXPIRED', updated_at=NOW() WHERE status='OPEN' AND response_deadline < NOW() AND quantity_awarded = 0`)
-  await query(`UPDATE b2b_quotes q SET status='EXPIRED', updated_at=NOW() FROM b2b_requirements r WHERE r.id=q.requirement_id AND r.status='EXPIRED' AND q.status='SUBMITTED'`)
+/**
+ * Marks requirements/quotes whose deadline has passed as EXPIRED.
+ *
+ * This used to run (two UPDATEs, the second a join over every EXPIRED requirement) on EVERY read — the vendor home
+ * alone calls it 3x per refresh, every few seconds, per vendor. The list/summary queries already filter on
+ * `response_deadline > NOW()`, so correctness never depended on it running each time; only the stored status label
+ * is affected. It now runs at most once per EXPIRE_EVERY_MS per process, and concurrent callers share one run.
+ * Under vitest it runs every time so existing expectations about immediate expiry hold.
+ */
+const EXPIRE_EVERY_MS = Number(process.env.B2B_EXPIRE_EVERY_MS ?? (process.env.VITEST ? 0 : 15000))
+let lastExpireAt = 0
+let expireRun = null
+
+function expireStale() {
+  if (expireRun) return expireRun
+  const now = Date.now()
+  if (EXPIRE_EVERY_MS > 0 && now - lastExpireAt < EXPIRE_EVERY_MS) return Promise.resolve()
+  lastExpireAt = now
+  expireRun = (async () => {
+    try {
+      await query(`UPDATE b2b_requirements SET status='EXPIRED', updated_at=NOW() WHERE status='OPEN' AND response_deadline < NOW() AND quantity_awarded = 0`)
+      await query(`UPDATE b2b_quotes q SET status='EXPIRED', updated_at=NOW() FROM b2b_requirements r WHERE r.id=q.requirement_id AND r.status='EXPIRED' AND q.status='SUBMITTED'`)
+    } catch (err) {
+      lastExpireAt = 0 // let the next read retry
+      throw err
+    } finally {
+      expireRun = null
+    }
+  })()
+  return expireRun
 }
 
 // ── Money (vendor settlement ledger = the "Dealker wallet") ──────────────────
@@ -621,45 +648,56 @@ export const b2b = {
       const hits = rows.map((r) => mapRow(r, inv)).filter((r) => r.my_match?.level === 'EXACT' && !r.my_quote)
       return { data: hits.slice((pg - 1) * lim, pg * lim), pagination: { page: pg, limit: lim, total: hits.length } }
     }
-    const cnt = await query(`SELECT COUNT(*)::int n FROM b2b_requirements r ${view} ${myQuote} ${w}`, params)
-    const { rows } = await query(`${base} ORDER BY ${scope === 'quoted' ? 'q.updated_at' : 'r.created_at'} DESC LIMIT ${lim} OFFSET ${(pg - 1) * lim}`, params)
-    const inv = scope === 'mine' ? null : await inventoryFor(vendorId)
+    // Independent reads: run them together instead of paying three sequential round-trips.
+    const [cnt, { rows }, inv] = await Promise.all([
+      query(`SELECT COUNT(*)::int n FROM b2b_requirements r ${view} ${myQuote} ${w}`, params),
+      query(`${base} ORDER BY ${scope === 'quoted' ? 'q.updated_at' : 'r.created_at'} DESC LIMIT ${lim} OFFSET ${(pg - 1) * lim}`, params),
+      scope === 'mine' ? null : inventoryFor(vendorId),
+    ])
     return { data: rows.map((r) => mapRow(r, inv)), pagination: { page: pg, limit: lim, total: cnt.rows[0].n } }
   },
 
   /** Counts that drive the hub tabs, the home banner and "needs your action". */
   async demandSummary(vendorId) {
     await expireStale()
-    const inv = await inventoryFor(vendorId)
-    const open = (await query(
-      `SELECT r.id, r.product_name, r.brand, r.model_key, r.storage, r.condition_pref, r.min_battery_health, r.is_urgent, r.required_by, r.quantity_needed,
-              (v.first_seen_at IS NOT NULL) AS viewed, (q.id IS NOT NULL) AS quoted
-         FROM b2b_requirements r
-         LEFT JOIN b2b_requirement_views v ON v.requirement_id = r.id AND v.vendor_id = $1
-         LEFT JOIN b2b_quotes q ON q.requirement_id = r.id AND q.seller_vendor_id = $1
-        WHERE ${OPEN_FOR_ME} AND v.dismissed_at IS NULL ORDER BY r.created_at DESC LIMIT 300`, [vendorId])).rows
+    // inventory + 4 independent aggregates: one round-trip of latency instead of five.
+    const [inv, openRes, offersRes, mineRes, ordersRes] = await Promise.all([
+      inventoryFor(vendorId),
+      query(
+        `SELECT r.id, r.product_name, r.brand, r.model_key, r.storage, r.condition_pref, r.min_battery_health, r.is_urgent, r.required_by, r.quantity_needed,
+                (v.first_seen_at IS NOT NULL) AS viewed, (q.id IS NOT NULL) AS quoted
+           FROM b2b_requirements r
+           LEFT JOIN b2b_requirement_views v ON v.requirement_id = r.id AND v.vendor_id = $1
+           LEFT JOIN b2b_quotes q ON q.requirement_id = r.id AND q.seller_vendor_id = $1
+          WHERE ${OPEN_FOR_ME} AND v.dismissed_at IS NULL ORDER BY r.created_at DESC LIMIT 300`, [vendorId]),
+      query(
+        `SELECT COUNT(*) FILTER (WHERE ${OFFER_TABS.active})::int AS active, COUNT(*) FILTER (WHERE ${OFFER_TABS.pending})::int AS pending,
+                COUNT(*) FILTER (WHERE ${OFFER_TABS.closed})::int AS closed,
+                COUNT(*) FILTER (WHERE q.status IN ('SELECTED','PARTIALLY_SELECTED') AND r.status NOT IN ('COMPLETED','CANCELLED'))::int AS accepted
+           FROM b2b_quotes q JOIN b2b_requirements r ON r.id = q.requirement_id WHERE q.seller_vendor_id = $1`, [vendorId]),
+      query(
+        `SELECT COUNT(*) FILTER (WHERE status = 'OPEN')::int AS open, COUNT(*)::int AS total,
+                COALESCE(SUM((SELECT COUNT(*) FROM b2b_quotes q WHERE q.requirement_id = r.id AND q.status = 'SUBMITTED' AND r.status = 'OPEN')), 0)::int AS offers_waiting
+           FROM b2b_requirements r WHERE buyer_vendor_id = $1`, [vendorId]),
+      query(
+        `SELECT COUNT(*) FILTER (WHERE buyer_vendor_id = $1 AND status = 'PENDING_PAYMENT')::int AS to_pay,
+                COUNT(*) FILTER (WHERE buyer_vendor_id = $1 AND status IN ('DISPATCHED','DELIVERED'))::int AS to_receive,
+                COUNT(*) FILTER (WHERE buyer_vendor_id = $1 AND status = ANY($2))::int AS buying_active,
+                COUNT(*) FILTER (WHERE seller_vendor_id = $1 AND status IN ('PAID','PACKED'))::int AS to_dispatch,
+                COUNT(*) FILTER (WHERE seller_vendor_id = $1 AND status = ANY($2))::int AS selling_active
+           FROM b2b_orders
+          WHERE buyer_vendor_id = $1 OR seller_vendor_id = $1`, [vendorId, OPEN_ORDER_STATUSES]), // every FILTER above is per-vendor: don't scan the whole table
+    ])
+    const open = openRes.rows
+    const offers = offersRes.rows[0]
+    const mine = mineRes.rows[0]
+    const orders = ordersRes.rows[0]
     let fresh = 0; let matched = 0; let urgent = 0
     for (const r of open) {
       if (!r.viewed && !r.quoted) fresh++
       if (demandTags(r).includes('URGENT')) urgent++
       if (!r.quoted && matchInventory(r, inv).level === 'EXACT') matched++
     }
-    const offers = (await query(
-      `SELECT COUNT(*) FILTER (WHERE ${OFFER_TABS.active})::int AS active, COUNT(*) FILTER (WHERE ${OFFER_TABS.pending})::int AS pending,
-              COUNT(*) FILTER (WHERE ${OFFER_TABS.closed})::int AS closed,
-              COUNT(*) FILTER (WHERE q.status IN ('SELECTED','PARTIALLY_SELECTED') AND r.status NOT IN ('COMPLETED','CANCELLED'))::int AS accepted
-         FROM b2b_quotes q JOIN b2b_requirements r ON r.id = q.requirement_id WHERE q.seller_vendor_id = $1`, [vendorId])).rows[0]
-    const mine = (await query(
-      `SELECT COUNT(*) FILTER (WHERE status = 'OPEN')::int AS open, COUNT(*)::int AS total,
-              COALESCE(SUM((SELECT COUNT(*) FROM b2b_quotes q WHERE q.requirement_id = r.id AND q.status = 'SUBMITTED' AND r.status = 'OPEN')), 0)::int AS offers_waiting
-         FROM b2b_requirements r WHERE buyer_vendor_id = $1`, [vendorId])).rows[0]
-    const orders = (await query(
-      `SELECT COUNT(*) FILTER (WHERE buyer_vendor_id = $1 AND status = 'PENDING_PAYMENT')::int AS to_pay,
-              COUNT(*) FILTER (WHERE buyer_vendor_id = $1 AND status IN ('DISPATCHED','DELIVERED'))::int AS to_receive,
-              COUNT(*) FILTER (WHERE buyer_vendor_id = $1 AND status = ANY($2))::int AS buying_active,
-              COUNT(*) FILTER (WHERE seller_vendor_id = $1 AND status IN ('PAID','PACKED'))::int AS to_dispatch,
-              COUNT(*) FILTER (WHERE seller_vendor_id = $1 AND status = ANY($2))::int AS selling_active
-         FROM b2b_orders`, [vendorId, OPEN_ORDER_STATUSES])).rows[0]
     return { open: open.length, new: fresh, matched, urgent, offers, mine, orders }
   },
 

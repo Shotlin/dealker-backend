@@ -1,4 +1,5 @@
 import { query, getClient } from '../../../config/database.js'
+import { invalidateAuthContext } from '../../../utils/auth-context.js'
 
 export class AdminCustomersRepository {
   async findAll({ offset, limit, search, status, sortBy = 'created_at', sortOrder = 'DESC' }) {
@@ -246,6 +247,7 @@ export class AdminCustomersRepository {
       'UPDATE users SET is_blocked = $1, blocked_at = $3, is_active = $4, updated_at = NOW() WHERE id = $2 RETURNING id, name, is_active, is_blocked',
       [blocked, userId, blocked ? new Date() : null, !blocked]
     )
+    invalidateAuthContext(userId)
     return user
   }
 

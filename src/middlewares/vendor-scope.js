@@ -31,6 +31,7 @@
 import { query } from '../config/database.js'
 import { logger } from '../config/logger.js'
 import { cacheDel, cacheGet, cacheSet } from '../utils/cache.js'
+import { createTtlCache, envTtl } from '../utils/ttl-cache.js'
 import { ROLES, ROLE_GROUPS } from '../constants/roles.js'
 import { ERROR_CODES, HTTP_STATUS } from '../constants/errors.js'
 
@@ -68,9 +69,18 @@ export function vendorStaffCacheKey(userId, vendorId) {
  * @param {string} vendorId
  */
 export async function invalidateVendorStaffCache(userId, vendorId) {
+  if (userId) membershipCache.invalidatePrefix(`${userId}:`)
   if (!userId || !vendorId) return
   await cacheDel(vendorStaffCacheKey(userId, vendorId))
 }
+
+/**
+ * Short in-process cache for the memberships lookup below. OTP-login vendor tokens carry no vendorId claim, so
+ * without it EVERY request of such a vendor ran this join — and the app sends ~15 at once when a screen opens.
+ * Concurrent callers share one in-flight query. Membership changes made through invalidateVendorStaffCache() show
+ * up immediately, anything else within VENDOR_MEMBERSHIP_CACHE_MS (default 30 s).
+ */
+const membershipCache = createTtlCache({ ttlMs: envTtl('VENDOR_MEMBERSHIP_CACHE_MS', 30000), max: 10000 })
 
 /**
  * Validate active vendor staff membership via cache-through DB check
@@ -170,25 +180,27 @@ export function extractVendorId(req) {
 }
 
 /**
- * Resolve the active vendor memberships of a user (no caching — used at most
- * once per request when the JWT carries no vendor claim)
+ * Resolve the active vendor memberships of a user (used when the JWT carries no vendor claim;
+ * cached briefly and de-duplicated across a burst of parallel requests)
  * @param {string} userId
  * @returns {Promise<string[]>} active vendor UUIDs
  */
-export async function findActiveVendorMemberships(userId, { onboarding = false } = {}) {
-  const { rows } = await query(
-    `SELECT vu.vendor_id
-       FROM vendor_users vu
-       JOIN vendors v ON v.id = vu.vendor_id
-      WHERE vu.user_id = $1
-        AND vu.is_active = true
-        AND vu.deleted_at IS NULL
-        AND (v.is_active = true OR ($2::boolean AND v.status = ANY($3::text[])))
-        AND v.deleted_at IS NULL
-      ORDER BY vu.created_at`,
-    [userId, onboarding, ONBOARDING_STATUSES]
-  )
-  return rows.map((row) => row.vendor_id)
+export function findActiveVendorMemberships(userId, { onboarding = false } = {}) {
+  return membershipCache.get(`${userId}:${onboarding ? 'onb' : 'act'}`, async () => {
+    const { rows } = await query(
+      `SELECT vu.vendor_id
+         FROM vendor_users vu
+         JOIN vendors v ON v.id = vu.vendor_id
+        WHERE vu.user_id = $1
+          AND vu.is_active = true
+          AND vu.deleted_at IS NULL
+          AND (v.is_active = true OR ($2::boolean AND v.status = ANY($3::text[])))
+          AND v.deleted_at IS NULL
+        ORDER BY vu.created_at`,
+      [userId, onboarding, ONBOARDING_STATUSES]
+    )
+    return rows.map((row) => row.vendor_id)
+  }, (ids) => ids.length > 0) // never remember "no membership": a vendor who just registered/was approved must work at once
 }
 
 /**

@@ -265,8 +265,12 @@ async function socketioPlugin(fastify) {
     }
 
     // ─── THEME EVENTS ────────────────────────────────
-    // All authenticated users join themes:live room for real-time theme updates
-    socket.join('themes:live')
+    // Authenticated storefront/dashboard clients join themes:live for real-time theme updates.
+    // The vendor app has no themed storefront, so it opts out (handshake auth.app = 'vendor'): otherwise every admin
+    // theme/section edit woke every connected vendor phone and made it refetch all of its screens.
+    if (socket.handshake.auth?.app !== 'vendor') {
+      socket.join('themes:live')
+    }
 
     // ─── DISCONNECT ──────────────────────────────────
     socket.on('disconnect', async (reason) => {

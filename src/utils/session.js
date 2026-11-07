@@ -13,6 +13,7 @@
 import crypto from 'node:crypto'
 import { query } from '../config/database.js'
 import { logger } from '../config/logger.js'
+import { invalidateAuthContext } from './auth-context.js'
 
 /**
  * Generate fingerprint hash from IP and User-Agent
@@ -133,6 +134,7 @@ export async function revokeSession(sessionId, userId) {
       WHERE id = $1 AND user_id = $2`,
     [sessionId, userId]
   )
+  invalidateAuthContext(userId)
   return rowCount > 0
 }
 
@@ -149,6 +151,7 @@ export async function revokeAllOtherSessions(currentSessionId, userId) {
       WHERE user_id = $1 AND id != $2 AND is_revoked = false`,
     [userId, currentSessionId]
   )
+  invalidateAuthContext(userId)
   return rowCount
 }
 
@@ -173,5 +176,6 @@ export async function revokeAllUserSessions(userId) {
     [userId]
   )
 
+  invalidateAuthContext(userId)
   return rows[0]?.session_version || 1
 }
