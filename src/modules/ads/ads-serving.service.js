@@ -42,7 +42,7 @@ const CANDIDATES_SQL = `
          l.id AS listing_id, l.shop_id, l.price AS list_price, l.sale_price, l.mrp, l.stock_quantity,
          l.cod_eligible, l.nationwide_shipping_enabled, l.local_delivery_enabled, l.handling_time_days, l.min_order_qty, l.seller_sku,
          s.name AS shop_name, s.seller_rating AS shop_rating, s.pincode AS shop_pincode,
-         COALESCE(v.name, 'Dealker') AS seller_name, v.name AS vendor_name,
+         COALESCE(v.name, 'Dealkr') AS seller_name, v.name AS vendor_name,
          COALESCE(l.sale_price, l.price, p.sale_price, p.price) AS effective_price,
          ($3::text IS NOT NULL AND (s.pincode = $3::text OR $3::text = ANY (s.serviceable_pincodes))) AS pincode_match
     FROM ad_campaigns c

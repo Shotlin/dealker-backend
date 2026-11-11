@@ -1,7 +1,7 @@
 import { env } from '../../config/env.js'
 
 /**
- * Single-store mode: Dealker is one e-commerce store (the platform shop,
+ * Single-store mode: Dealkr is one e-commerce store (the platform shop,
  * `shops.is_platform = true`) serving all of India — customers are never split
  * across shops by location. The platform shop's `serviceable_pincodes` is an
  * optional delivery restriction: empty = every pincode in India.

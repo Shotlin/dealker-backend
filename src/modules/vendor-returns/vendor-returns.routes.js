@@ -1,5 +1,5 @@
 /**
- * Vendor returns routes — /api/v1/manage/returns (vendors only; the Dealker team uses /admin/refund-requests).
+ * Vendor returns routes — /api/v1/manage/returns (vendors only; the Dealkr team uses /admin/refund-requests).
  *
  * @module modules/vendor-returns/vendor-returns.routes
  */
@@ -89,7 +89,7 @@ export default async function vendorReturnsRoutes(fastify) {
     },
   }, wrap(async (r) => ok(await svc.respond(r.vendorId, uid(r), r.params.id, r.body))))
 
-  /** Get-or-create the vendor's chat with Dealker Support for this return; messages then flow through /support/tickets/:ticketId. */
+  /** Get-or-create the vendor's chat with Dealkr Support for this return; messages then flow through /support/tickets/:ticketId. */
   fastify.post('/:id/chat', {
     preHandler: pre,
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },

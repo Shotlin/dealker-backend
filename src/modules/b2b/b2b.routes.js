@@ -112,7 +112,7 @@ export async function vendorB2bRoutes(fastify) {
 /** Admin dashboard — /api/v1/admin/b2b */
 export async function adminB2bRoutes(fastify) {
   const pre = [fastify.authenticate, fastify.requireAdmin]
-  const actor = (req) => ({ userId: req.userId || req.user.id, isAdmin: true, label: 'Dealker admin' })
+  const actor = (req) => ({ userId: req.userId || req.user.id, isAdmin: true, label: 'Dealkr admin' })
 
   fastify.get('/stats', { preHandler: pre }, wrap(async () => ({ success: true, data: await b2b.stats() })))
   fastify.get('/insights', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.demandInsights({ days: req.query?.days }) })))

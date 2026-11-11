@@ -136,7 +136,7 @@ export function serializePublic(a, ctx = {}) {
     audience: a.audience || 'B2C',
     quantity: Number(a.quantity || 1),
     unit_price: Number(a.quantity || 1) > 1 ? Math.round(((a.bid_count > 0 ? num(a.current_price) : num(a.start_price)) / Number(a.quantity)) * 100) / 100 : null,
-    seller: { type: a.vendor_id ? 'VENDOR' : 'PLATFORM', name: a.seller_name || (a.vendor_id ? 'Verified seller' : 'Dealker Official') },
+    seller: { type: a.vendor_id ? 'VENDOR' : 'PLATFORM', name: a.seller_name || (a.vendor_id ? 'Verified seller' : 'Dealkr Official') },
     start_price: num(a.start_price),
     current_price: a.bid_count > 0 ? num(a.current_price) : num(a.start_price),
     min_next_bid: showMin ? fromPaise(minNextBid(state, cfg)) : null,

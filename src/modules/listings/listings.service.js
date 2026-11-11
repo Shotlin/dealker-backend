@@ -35,7 +35,7 @@ const BASE = `
 
 const CARD = `
   SELECT sp.id, sp.product_id, p.name, p.brand, p.condition, p.owner_type, p.owner_vendor_id AS vendor_id,
-         COALESCE(v.name, 'Dealker') AS owner_name, c.name AS category_name, p.category_id,
+         COALESCE(v.name, 'Dealkr') AS owner_name, c.name AS category_name, p.category_id,
          p.thumbnail_url, COALESCE(jsonb_array_length(p.images), 0) AS image_count,
          COALESCE(sp.sale_price, sp.price) AS price, sp.mrp, sp.stock_quantity AS stock,
          sp.approval_status, sp.listing_status, sp.rejection_reason, sp.sold_count, sp.created_at, p.sku,
@@ -120,7 +120,7 @@ export const listingsService = {
               p.usage_duration, p.warranty_info, p.accessories_included, p.battery_health, p.serial_number, p.imei, p.has_invoice, p.hsn_code,
               sp.qc_status, sp.qc_mode, sp.qc_score, sp.qc_notes, sp.qc_checked_at,
               sp.sell_b2c, sp.sell_b2b, sp.wholesale_price, sp.min_order_qty, sp.b2b_discount_pct, sp.b2b_notes, sp.vendor_qc, p.video_url, p.highlights,
-              p.gst_rate, p.specifications, p.return_policy_days, p.owner_type, p.owner_vendor_id AS vendor_id, COALESCE(v.name,'Dealker') AS owner_name
+              p.gst_rate, p.specifications, p.return_policy_days, p.owner_type, p.owner_vendor_id AS vendor_id, COALESCE(v.name,'Dealkr') AS owner_name
          ${BASE} AND sp.id = $1 ${scope.vendorId ? 'AND p.owner_vendor_id = $2' : ''}`, scope.vendorId ? [id, scope.vendorId] : [id])
     if (!rows[0]) throw err(404, 'Listing not found', 'NOT_FOUND')
     const r = rows[0]
@@ -341,7 +341,7 @@ export const listingsService = {
       if (!r || r.condition === 'NEW') return
       if (r.highlights && typeof r.highlights === 'object' && Object.keys(r.highlights).length) return
       const lines = []
-      if (r.qc_status === 'QC_PASSED') lines.push('Dealker QC verified — every function tested')
+      if (r.qc_status === 'QC_PASSED') lines.push('Dealkr QC verified — every function tested')
       if (r.battery_health != null) lines.push(`Battery health ${r.battery_health}%`)
       const w = String(r.warranty_info || '').trim()
       if (w && !/^no warranty$/i.test(w)) lines.push(/warranty/i.test(w) ? w : `${w} seller warranty`)

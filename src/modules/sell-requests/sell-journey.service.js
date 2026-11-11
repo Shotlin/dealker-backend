@@ -70,7 +70,7 @@ export async function verifyImei(userId, { imei, modelId } = {}) {
   add('FORMAT', 'Valid IMEI', format ? 'PASS' : 'FAIL', format ? undefined : 'An IMEI is 15 digits. Dial *#06# to see it.')
   if (format) {
     const { rows: blocked } = await query('SELECT 1 FROM sell_imei_blocklist WHERE imei = $1', [v])
-    add('BLOCKLIST', 'Not on our blocked list', blocked[0] ? 'FAIL' : 'PASS', blocked[0] ? 'This device cannot be sold on Dealker.' : undefined)
+    add('BLOCKLIST', 'Not on our blocked list', blocked[0] ? 'FAIL' : 'PASS', blocked[0] ? 'This device cannot be sold on Dealkr.' : undefined)
 
     const { rows: live } = await query(
       `SELECT id, user_id, code FROM sell_requests WHERE imei = $1 AND status IN ('PENDING','IN_PROGRESS','APPROVED') LIMIT 1`, [v])
@@ -80,7 +80,7 @@ export async function verifyImei(userId, { imei, modelId } = {}) {
 
     const { rows: sold } = await query(
       `SELECT 1 FROM sell_requests WHERE imei = $1 AND status = 'COMPLETED' AND user_id IS DISTINCT FROM $2 LIMIT 1`, [v, userId])
-    if (sold[0]) add('SOLD_BEFORE', 'Sold on Dealker before', 'WARN', 'This phone was sold on Dealker earlier by another account. The buyer will confirm ownership at inspection.')
+    if (sold[0]) add('SOLD_BEFORE', 'Sold on Dealkr before', 'WARN', 'This phone was sold on Dealkr earlier by another account. The buyer will confirm ownership at inspection.')
 
     add('CEIR', 'Government (CEIR) check', 'INFO', 'The buyer checks the IMEI against the national CEIR database when the phone is inspected.')
   }
@@ -102,7 +102,7 @@ export async function findPassingCheck(client, userId, imei, checkId) {
 export async function assertNotBlocked(imei, client = null) {
   const run = client ? client.query.bind(client) : query
   const { rows } = await run('SELECT 1 FROM sell_imei_blocklist WHERE imei = $1', [imei])
-  if (rows[0]) throw new SellError('IMEI_BLOCKED', 'This device cannot be sold on Dealker', 403)
+  if (rows[0]) throw new SellError('IMEI_BLOCKED', 'This device cannot be sold on Dealkr', 403)
 }
 
 // ── Blocklist (dashboard) ───────────────────────────────────────────────
@@ -543,7 +543,7 @@ export async function payoutOptions(userId, amount) {
   return [
     { method: 'UPI', enabled: s.payout_upi_enabled, label: 'UPI', hint: 'Sent to your UPI ID after approval' },
     { method: 'BANK', enabled: s.payout_bank_enabled, label: 'Bank transfer', hint: 'IMPS / NEFT to your bank account' },
-    { method: 'WALLET', enabled: wallet, label: 'Dealker wallet', hint: wallet ? 'Instant' : `Wallet can only hold ₹${room ?? 0} more`, instant: true },
+    { method: 'WALLET', enabled: wallet, label: 'Dealkr wallet', hint: wallet ? 'Instant' : `Wallet can only hold ₹${room ?? 0} more`, instant: true },
   ]
 }
 
@@ -566,7 +566,7 @@ export async function choosePayout(userId, id, input = {}) {
     if (!IFSC_RE.test(ifsc)) throw new SellError('VALIDATION', 'Enter a valid IFSC code', 422)
     if (input.confirmAccountNumber != null && String(input.confirmAccountNumber).replace(/\s+/g, '') !== acc) throw new SellError('VALIDATION', 'Account numbers do not match', 422)
     details = { holderName: holder, accountNumber: acc, ifsc }; display = `Bank ••${acc.slice(-4)} · ${ifsc}`
-  } else display = 'Dealker wallet'
+  } else display = 'Dealkr wallet'
 
   await tx(async (client) => {
     const actor = { kind: 'CUSTOMER', scopeKind: 'SELL', userId }

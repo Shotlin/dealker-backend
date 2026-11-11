@@ -101,7 +101,7 @@ export const sellerOrdersRoutes = async function sellerOrderRoutes(fastify) {
 
   /**
    * Vendor ships the parcel themselves: records the courier + tracking number and marks it on its way.
-   * (Delivery itself is confirmed by Dealker, which also releases the vendor's payout.)
+   * (Delivery itself is confirmed by Dealkr, which also releases the vendor's payout.)
    */
   fastify.post('/:id/ship', {
     preHandler: [fastify.authenticate, requireVendorScope(), guard('seller_orders.manage')],

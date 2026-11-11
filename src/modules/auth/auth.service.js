@@ -65,13 +65,28 @@ export class AuthService {
       .filter(Boolean)
   }
 
+  /**
+   * DEV ONLY: DEMO_OTP_PHONES=* makes the fixed demo OTP (DEMO_OTP_CODE, default 123456) work for
+   * EVERY phone number, with no SMS sent. Remove the `*` (or set ALLOW_DEMO_OTP=false) before the
+   * production launch and the real SMS provider is used again.
+   */
+  _isDemoOtpForAll() {
+    return Boolean(env.ALLOW_DEMO_OTP) && `${env.DEMO_OTP_PHONES || ''}`.split(',').map((p) => p.trim()).includes('*')
+  }
+
   _isDemoOtpEnabled() {
-    return env.ALLOW_DEMO_OTP && this._demoOtpPhones().length > 0
+    return env.ALLOW_DEMO_OTP && (this._demoOtpPhones().length > 0 || this._isDemoOtpForAll())
+  }
+
+  /** A phone that is explicitly listed in DEMO_OTP_PHONES (the `*` wildcard does not count). */
+  _isListedDemoPhone(phone) {
+    if (!env.ALLOW_DEMO_OTP) return false
+    return this._demoOtpPhones().includes(normalizePhoneForOtp(phone))
   }
 
   _isDemoOtpPhone(phone) {
     if (!this._isDemoOtpEnabled()) return false
-    return this._demoOtpPhones().includes(normalizePhoneForOtp(phone))
+    return this._isDemoOtpForAll() || this._demoOtpPhones().includes(normalizePhoneForOtp(phone))
   }
 
   /**
@@ -208,7 +223,7 @@ export class AuthService {
 
     // Demo-OTP riders (App Store / Play Store reviewer accounts) skip the
     // manual admin-approval step so the app opens straight to /home.
-    const isDemoRider = requestedRole === 'RIDER' && this._isDemoOtpPhone(phone)
+    const isDemoRider = requestedRole === 'RIDER' && this._isListedDemoPhone(phone)
 
     // Find or create user
     let user = await this.repo.findByPhone(phone)

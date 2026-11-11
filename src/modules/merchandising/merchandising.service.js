@@ -67,7 +67,7 @@ export class MerchandisingService {
     const from = `FROM shop_products sp JOIN products p ON p.id = sp.product_id LEFT JOIN vendors v ON v.id = p.owner_vendor_id WHERE ${where.join(' AND ')}`
     const total = (await query(`SELECT COUNT(*)::int n ${from}`, params)).rows[0].n
     const { rows } = await query(
-      `SELECT sp.id, p.name, p.brand, p.condition, p.thumbnail_url, COALESCE(v.name, 'Dealker') AS owner_name,
+      `SELECT sp.id, p.name, p.brand, p.condition, p.thumbnail_url, COALESCE(v.name, 'Dealkr') AS owner_name,
               COALESCE(sp.sale_price, sp.price) AS price, sp.mrp, sp.stock_quantity AS stock, sp.approval_status, sp.listing_status,
               sp.merch_section, sp.merch_starts_at, sp.merch_ends_at, sp.merch_position, sp.sell_b2c, sp.sell_b2b, sp.qc_status
          ${from} ORDER BY sp.merch_position DESC, sp.created_at DESC LIMIT ${lim} OFFSET ${off}`, params)

@@ -1,5 +1,5 @@
 /**
- * In-app payment of a repair by the customer: Razorpay Checkout (UPI / card / netbanking) or the Dealker wallet.
+ * In-app payment of a repair by the customer: Razorpay Checkout (UPI / card / netbanking) or the Dealkr wallet.
  * Every verified payment ends in the same idempotent `applyPayment`, which appends to `repair_payments`
  * exactly like a payment the shop records by hand — so due amounts, delivery gating and invoices need no changes.
  *
@@ -70,7 +70,7 @@ export async function createOrder(actor, id) {
     const ins = await query(`INSERT INTO repair_razorpay_orders (request_id, user_id, razorpay_order_id, kind, amount) VALUES ($1,$2,$3,$4,$5) RETURNING *`, [id, actor.userId, rzp.id, due.kind, due.amount])
     order = ins.rows[0]
   }
-  return { keyId: getRazorpayKeyId(), orderId: order.razorpay_order_id, amount: money.paise(due.amount), amountRupees: due.amount, currency: 'INR', name: 'Dealker', description: `Repair ${r.code}`, kind: due.kind }
+  return { keyId: getRazorpayKeyId(), orderId: order.razorpay_order_id, amount: money.paise(due.amount), amountRupees: due.amount, currency: 'INR', name: 'Dealkr', description: `Repair ${r.code}`, kind: due.kind }
 }
 
 const safeEqual = (a, b) => {

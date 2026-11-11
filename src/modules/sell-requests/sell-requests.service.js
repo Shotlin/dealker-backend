@@ -176,11 +176,14 @@ export const serializeModel = (m) => ({
   id: m.id, name: m.name, category: m.category, variants: m.variants, colors: m.colors,
   basePrice: num(m.base_price), isActive: m.is_active,
   brand: m.brand || null, brandLogoUrl: m.brand_logo_url || null, imageUrl: m.image_url || null,
+  series: m.series || null, saleEnabled: m.sale_enabled !== false, repairEnabled: m.repair_enabled !== false, displayOrder: m.display_order ?? 0,
 })
 
 export async function listModels({ includeInactive = false } = {}) {
   const { rows } = await query(
-    `SELECT * FROM sell_device_models ${includeInactive ? '' : 'WHERE is_active = TRUE'} ORDER BY (category <> 'Smartphone'), category, name`
+    `SELECT m.* FROM sell_device_models m LEFT JOIN device_brands b ON lower(b.name) = lower(m.brand)
+      ${includeInactive ? '' : 'WHERE m.is_active = TRUE AND m.sale_enabled = TRUE'}
+      ORDER BY (m.category <> 'Smartphone'), m.category, COALESCE(b.sort_order, 9999), lower(COALESCE(m.brand, '')), m.display_order, m.name`
   )
   return rows.map(serializeModel)
 }
@@ -197,15 +200,19 @@ async function parseModelInput(input, base = {}) {
   const category = input.category ?? base.category
   const variants = input.variants ?? base.variants
   const colors = input.colors ?? base.colors
-  const basePrice = Number(input.basePrice ?? base.base_price)
+  const rawPrice = input.basePrice !== undefined ? input.basePrice : base.base_price
+  const basePrice = rawPrice === null || rawPrice === '' || rawPrice === undefined ? null : Number(rawPrice)
   if (!name) throw new SellError('VALIDATION', 'Model name is required', 422)
   await assertTypeExists(category)
   const strs = (a) => Array.isArray(a) && a.length > 0 && a.every((x) => typeof x === 'string' && x.trim()) && new Set(a).size === a.length
   if (!strs(variants)) throw new SellError('VALIDATION', 'Variants must be a non-empty list of unique names', 422)
   if (!strs(colors)) throw new SellError('VALIDATION', 'Colors must be a non-empty list of unique names', 422)
-  if (!Number.isFinite(basePrice) || basePrice <= 0) throw new SellError('VALIDATION', 'Base price must be greater than zero', 422)
+  if (basePrice !== null && (!Number.isFinite(basePrice) || basePrice <= 0)) throw new SellError('VALIDATION', 'Base price must be greater than zero (leave it empty when there is no catalogue price)', 422)
   const opt = (v, b) => { const x = v === undefined ? b : v; return x == null || x === '' ? null : String(x).trim().slice(0, 500) }
+  const flag = (v, b) => (typeof v === 'boolean' ? v : b !== false)
+  const order = Number.isFinite(Number(input.displayOrder)) ? Math.max(0, Math.round(Number(input.displayOrder))) : (base.display_order ?? 0)
   return {
+    series: opt(input.series, base.series), saleEnabled: flag(input.saleEnabled, base.sale_enabled), repairEnabled: flag(input.repairEnabled, base.repair_enabled), displayOrder: order,
     name, category, variants, colors, basePrice,
     brand: opt(input.brand, base.brand), brandLogoUrl: opt(input.brandLogoUrl, base.brand_logo_url), imageUrl: opt(input.imageUrl, base.image_url),
   }
@@ -215,8 +222,9 @@ export async function createModel(input) {
   const m = await parseModelInput(input)
   try {
     const { rows } = await query(
-      `INSERT INTO sell_device_models (name, category, variants, colors, base_price, brand, brand_logo_url, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [m.name, m.category, JSON.stringify(m.variants), JSON.stringify(m.colors), m.basePrice, m.brand, m.brandLogoUrl, m.imageUrl]
+      `INSERT INTO sell_device_models (name, category, variants, colors, base_price, brand, brand_logo_url, image_url, series, sale_enabled, repair_enabled, display_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [m.name, m.category, JSON.stringify(m.variants), JSON.stringify(m.colors), m.basePrice, m.brand, m.brandLogoUrl, m.imageUrl, m.series, m.saleEnabled, m.repairEnabled, m.displayOrder]
     )
     return serializeModel(rows[0])
   } catch (err) {
@@ -232,9 +240,9 @@ export async function updateModel(id, input) {
   try {
     const { rows } = await query(
       `UPDATE sell_device_models SET name=$2, category=$3, variants=$4, colors=$5, base_price=$6,
-              brand=$8, brand_logo_url=$9, image_url=$10,
+              brand=$8, brand_logo_url=$9, image_url=$10, series=$11, sale_enabled=$12, repair_enabled=$13, display_order=$14,
               is_active = COALESCE($7, is_active), updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [id, m.name, m.category, JSON.stringify(m.variants), JSON.stringify(m.colors), m.basePrice, typeof input.isActive === 'boolean' ? input.isActive : null, m.brand, m.brandLogoUrl, m.imageUrl]
+      [id, m.name, m.category, JSON.stringify(m.variants), JSON.stringify(m.colors), m.basePrice, typeof input.isActive === 'boolean' ? input.isActive : null, m.brand, m.brandLogoUrl, m.imageUrl, m.series, m.saleEnabled, m.repairEnabled, m.displayOrder]
     )
     return serializeModel(rows[0])
   } catch (err) {
@@ -264,13 +272,17 @@ const short = (v, n) => String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, n)
  */
 async function resolveModelOrCustom(input, client = null) {
   const c = input.custom && typeof input.custom === 'object' ? input.custom : null
-  if (!c) return { model: await resolveModel(input, client), custom: null }
+  if (!c) {
+    const listed = await resolveModel(input, client)
+    if (listed.base_price == null) return withSellerPrice(listed, null, input)
+    return { model: listed, custom: null }
+  }
   const run = client ? client.query.bind(client) : query
   const name = short(c.model, 80)
   if (name && !input.modelId) {
     const { rows } = await run(`SELECT * FROM sell_device_models WHERE is_active = TRUE AND lower(name) = lower($1) LIMIT 1`, [short(`${c.brand || ''} ${name}`, 120)])
     const { rows: byName } = rows[0] ? { rows } : await run(`SELECT * FROM sell_device_models WHERE is_active = TRUE AND lower(name) = lower($1) LIMIT 1`, [name])
-    if (byName[0]) return { model: byName[0], custom: { storage: !!c.storage, colour: !!c.colour } }
+    if (byName[0]) return withSellerPrice(byName[0], c, input)
     const price = Number(c.expectedPrice)
     if (!Number.isFinite(price) || price < 1000 || price > 500000) {
       throw new SellError('VALIDATION', 'Enter the price you expect for this phone (₹1,000 to ₹5,00,000)', 422)
@@ -285,7 +297,19 @@ async function resolveModelOrCustom(input, client = null) {
       custom: { storage: false, colour: false, model: true },
     }
   }
-  return { model: await resolveModel(input, client), custom: { storage: !!c.storage, colour: !!c.colour } }
+  const listed = await resolveModel(input, client)
+  return withSellerPrice(listed, c, input)
+}
+
+/** A listed model without a catalogue price (imported device catalogue): value it from the price the seller expects. */
+function withSellerPrice(model, c, input) {
+  const custom = { storage: !!c?.storage, colour: !!c?.colour }
+  if (model.base_price != null) return { model, custom }
+  const price = Number(c?.expectedPrice ?? input?.expectedPrice)
+  if (!Number.isFinite(price) || price < 1000 || price > 500000) {
+    throw new SellError('PRICE_REQUIRED', 'Enter the price you expect for this phone (₹1,000 to ₹5,00,000)', 422)
+  }
+  return { model: { ...model, base_price: price, custom: true }, custom }
 }
 
 /** Quote without persisting — used by the customer app before submitting. */
@@ -531,7 +555,7 @@ async function cleanImages(images, max) {
   const prefixes = await trustedPrefixes()
   for (const u of images) {
     if (typeof u !== 'string' || u.length > 500 || !prefixes.some((p) => u.startsWith(p)) || u.includes('..')) {
-      throw new SellError('VALIDATION', 'Images must be uploaded through the Dealker upload endpoint', 422)
+      throw new SellError('VALIDATION', 'Images must be uploaded through the Dealkr upload endpoint', 422)
     }
   }
   return [...new Set(images)]

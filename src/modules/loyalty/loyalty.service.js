@@ -141,7 +141,7 @@ export class LoyaltyService {
   }
 
   /**
-   * What the cart screen shows for Dealker Points: the redeemable balance, how many points this cart may
+   * What the cart screen shows for Dealkr Points: the redeemable balance, how many points this cart may
    * redeem (same clamp the order applies), and the points the order would earn. Nothing is stored.
    * `couponDiscount` (client-reported, only ever shrinks the redeemable value) is subtracted first, exactly like checkout.
    */

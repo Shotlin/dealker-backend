@@ -7,13 +7,13 @@ const WINDOW_DAYS = 7 // used only when a listing does not say how many return d
 const settlements = new VendorSettlementsService()
 
 const LEDGER_LABEL = {
-  GROSS_SALES: 'Sale value', SELLER_DISCOUNT: 'Discount given by the seller', PLATFORM_DISCOUNT: 'Discount paid by Dealker (added back)', COMMISSION: 'Dealker commission',
+  GROSS_SALES: 'Sale value', SELLER_DISCOUNT: 'Discount given by the seller', PLATFORM_DISCOUNT: 'Discount paid by Dealkr (added back)', COMMISSION: 'Dealkr commission',
   LOGISTICS: 'Delivery cost', REFUND: 'Refund to the customer', PENALTY: 'Penalty', ADJUSTMENT: 'Adjustment', INCENTIVE: 'Incentive', PAYOUT: 'Paid out to the seller',
 }
 
 const STATE_TEXT = {
   WAITING_DELIVERY: ['Waiting for delivery', 'The seller is paid only after the customer has received the parcel.'],
-  RETURN_WINDOW: ['Delivered — in the return window', 'Dealker keeps the money for {days} days in case the customer returns it.'],
+  RETURN_WINDOW: ['Delivered — in the return window', 'Dealkr keeps the money for {days} days in case the customer returns it.'],
   READY: ['Ready to be paid', '{ready}'],
   PROCESSING: ['Payout in progress', 'A payout has been created. Mark it as paid once the bank transfer is done.'],
   PAID: ['Paid', 'The seller has been paid for this parcel.'],

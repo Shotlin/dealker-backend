@@ -36,7 +36,7 @@ function party(doc, x, y, w, title, p) {
 /** @param {object} d  a sales_documents row (snake_case columns as stored) */
 export function renderDocumentPdf(d, { original } = {}) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: M, info: { Title: `${TITLES[d.doc_type]} ${d.doc_number}`, Producer: 'Dealker' } })
+    const doc = new PDFDocument({ size: 'A4', margin: M, info: { Title: `${TITLES[d.doc_type]} ${d.doc_number}`, Producer: 'Dealkr' } })
     const chunks = []
     doc.on('data', (c) => chunks.push(c)); doc.on('end', () => resolve(Buffer.concat(chunks))); doc.on('error', reject)
     doc.registerFont(FONT, STORE_INFO.currencyFontPath)

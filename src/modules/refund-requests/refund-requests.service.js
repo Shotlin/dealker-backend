@@ -428,7 +428,7 @@ export class RefundRequestsService {
     publishRefundStatus(full, { io: this.fastify?.io, event: 'REFUND_APPROVED' })
     await this.#notifyCustomer(full, {
       title: '💰 Refund approved',
-      body: `₹${amount} ${destination === 'WALLET' ? 'was added to your Dealker wallet' : 'is being refunded to your original payment method'} for order ${full.order_number}.`,
+      body: `₹${amount} ${destination === 'WALLET' ? 'was added to your Dealkr wallet' : 'is being refunded to your original payment method'} for order ${full.order_number}.`,
       // Wallet balance changed too — mobile's wallet refresh keys off type.
       type: 'ORDER_STATUS',
     })

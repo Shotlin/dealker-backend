@@ -182,7 +182,7 @@ export async function optionsForProduct(productId) {
   const info = await forProduct(productId)
   if (!info.eligible) throw new SellError('NOT_ELIGIBLE', 'Exchange is not available for this product', 404)
   const { rows } = await query(
-    `SELECT * FROM sell_device_models WHERE is_active = TRUE AND category = ANY($1::text[]) ORDER BY category, name`, [info.types.map((t) => t.key)])
+    `SELECT * FROM sell_device_models WHERE is_active = TRUE AND base_price IS NOT NULL AND category = ANY($1::text[]) ORDER BY category, name`, [info.types.map((t) => t.key)])
   return { ...info, models: rows }
 }
 

@@ -67,7 +67,7 @@ const COPY = {
     c: (r) => ({ title: 'A buyer has been found', body: `Your ${r.model_name} request ${r.code} has a buyer at ${rupees(r.final_price)}. We'll confirm shortly.` }),
     v: (r) => ({ to: 'ASSIGNED', title: 'Your offer was selected', body: `${r.code} · ${r.model_name} at ${rupees(r.final_price)}.` }),
   },
-  OFFER_RECEIVED: { c: (r, x) => ({ title: 'You got an offer!', body: `A buyer offered ${rupees(x.amount)} for your ${r.model_name}. Open Dealker to look at it and choose.` }) },
+  OFFER_RECEIVED: { c: (r, x) => ({ title: 'You got an offer!', body: `A buyer offered ${rupees(x.amount)} for your ${r.model_name}. Open Dealkr to look at it and choose.` }) },
   OFFER_DECLINED: { v: (r) => ({ to: 'OFFERED', title: 'Offer not selected', body: `${r.code} · ${r.model_name} went to another vendor.` }) },
   APPROVED: {
     c: (r) => ({ title: 'Request approved', body: `${r.code} for your ${r.model_name} is approved at ${rupees(r.final_price ?? r.quote)}.` }),
@@ -91,7 +91,7 @@ const COPY = {
   PRICE_REVISED: { c: (r) => ({ title: 'Price changed after inspection', body: `${r.code}: please review the new price in the app.` }) },
   FINAL_PRICE_APPROVED: { c: (r) => ({ title: 'Final price approved', body: `${r.code}: ${rupees(r.payout_amount ?? r.final_price)} is ready. Choose how you want to be paid.` }) },
   PAYOUT_PROCESSING: { c: (r) => ({ title: 'Payment is on its way', body: `${r.code}: we are sending ${rupees(r.payout_amount)} to ${r.payout_display || 'your account'}.` }) },
-  PAYOUT_PAID: { c: (r) => ({ title: `${rupees(r.payout_amount)} sent`, body: `${r.code}: payment sent to ${r.payout_display || 'you'}. Thank you for selling with Dealker.` }) },
+  PAYOUT_PAID: { c: (r) => ({ title: `${rupees(r.payout_amount)} sent`, body: `${r.code}: payment sent to ${r.payout_display || 'you'}. Thank you for selling with Dealkr.` }) },
   PAYOUT_FAILED: { c: (r) => ({ title: 'Payment could not be sent', body: `${r.code}: please check your payment details and choose again.` }) },
   INFO_REQUESTED: { c: (r, x) => ({ title: 'More details needed', body: `${r.code}: ${x.message}` }) },
   QC_PASSED: { c: (r, x) => ({ title: 'Your device passed inspection', body: `${r.code}: final value ${x.finalValuation != null ? rupees(x.finalValuation) : rupees(r.quote)}. Open the app to accept or decline.` }) },

@@ -262,7 +262,7 @@ async function main() {
     const input = {
       name, categoryId: src[0].category_id, brand: src[0].brand, ownerVendorId: vendorIds[vi],
       condition: g, stock: 1, price, mrp: newPrice, images: images.slice(0, 6), sku,
-      description: `${name} — ${g === 'REFURBISHED' ? 'refurbished' : 'pre-owned'} unit, tested and quality-checked by Dealker. ${skin}.`,
+      description: `${name} — ${g === 'REFURBISHED' ? 'refurbished' : 'pre-owned'} unit, tested and quality-checked by Dealkr. ${skin}.`,
       conditionNotes: `${skin}. Fully working, tested by our team before listing.`,
       usageDuration: pick(spec.usage, n), warrantyInfo: spec.warranty,
       accessoriesIncluded: ACCESSORIES[kind][g], batteryHealth: battery,
@@ -277,12 +277,12 @@ async function main() {
     const listingId = created.id
     await qc.setManual(
       listingId, 'QC_PASSED',
-      `${skin}. Inspected by Dealker QC — all functional tests passed.`, actorId,
+      `${skin}. Inspected by Dealkr QC — all functional tests passed.`, actorId,
       { score, checks: QC_CHECKS[kind](g).map(([label, status, detail]) => ({ label, status, detail })) })
     await query(
       `UPDATE products SET highlights = $2::jsonb WHERE id = $1`,
       [created.product_id || created.productId, JSON.stringify({
-        0: 'Dealker QC verified — every function tested',
+        0: 'Dealkr QC verified — every function tested',
         1: battery ? `Battery health ${battery}%` : 'Sound and controls tested',
         2: spec.warranty,
         3: '7-day replacement if it is not as described',

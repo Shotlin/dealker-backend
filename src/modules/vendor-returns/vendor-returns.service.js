@@ -4,9 +4,9 @@
  * What a vendor CAN do (vendor-scoped, mounted at /api/v1/manage/returns):
  *   - list + open the returns raised on their seller orders (reason, photos, items, status timeline, pickup, QC)
  *   - answer a return once ("I agree" / "I dispute" + note + photos); the team sees it in the staff case file
- *   - open a chat with Dealker Support about a return (a support ticket owned by the vendor user)
+ *   - open a chat with Dealkr Support about a return (a support ticket owned by the vendor user)
  *
- * What a vendor can NOT do (by design — the Dealker team decides and moves the money): approve, reject,
+ * What a vendor can NOT do (by design — the Dealkr team decides and moves the money): approve, reject,
  * refund, schedule the pickup or mark the item received. The customer's contact details are never returned.
  *
  * @module modules/vendor-returns/vendor-returns.service
@@ -112,7 +112,7 @@ function vendorStage(row) {
 
 const STAGE_LABEL = {
   NEEDS_RESPONSE: 'Needs your answer',
-  WITH_TEAM: 'With Dealker team',
+  WITH_TEAM: 'With Dealkr team',
   REFUNDED: 'Refunded to customer',
   REJECTED: 'Return rejected',
   CANCELLED: 'Cancelled by customer',
@@ -243,14 +243,14 @@ export async function detail(vendorId, userId, id) {
   }
 }
 
-/** "I agree" / "I dispute" — advisory; the Dealker team still decides. */
+/** "I agree" / "I dispute" — advisory; the Dealkr team still decides. */
 export async function respond(vendorId, userId, id, { stance, note, evidence = [] }) {
   const rr = await loadMine(vendorId, userId, id)
   if (!OPEN.includes(rr.status)) {
     throw new VendorReturnError(409, 'RETURN_CLOSED', `This return is already ${rr.status.toLowerCase()}, so it can no longer be answered.`)
   }
   const text = String(note || '').trim()
-  if (text.length < 3) throw new VendorReturnError(400, 'VALIDATION_ERROR', 'Please write a short note for the Dealker team.')
+  if (text.length < 3) throw new VendorReturnError(400, 'VALIDATION_ERROR', 'Please write a short note for the Dealkr team.')
 
   const client = await getClient()
   try {
@@ -298,13 +298,13 @@ export async function respond(vendorId, userId, id, { stance, note, evidence = [
   return detail(vendorId, userId, id)
 }
 
-/** Get-or-create the vendor's chat with Dealker Support about this return. */
+/** Get-or-create the vendor's chat with Dealkr Support about this return. */
 export async function openChat(vendorId, userId, id, { message } = {}) {
   const rr = await loadMine(vendorId, userId, id)
   const existing = await chatFor(userId, id)
   if (existing && existing.status !== 'CLOSED') return existing
   const rn = returnNumber(id)
-  const text = String(message || '').trim() || `Hi Dealker team, I need help with return ${rn} for order ${rr.order_number}.`
+  const text = String(message || '').trim() || `Hi Dealkr team, I need help with return ${rn} for order ${rr.order_number}.`
   const out = await supportService.create({
     userId,
     subject: `Seller · Return ${rn} · Order ${rr.order_number}`,
@@ -338,7 +338,7 @@ export async function notifyVendorsOfNewReturn(rr, notifier) {
       [rr.order_id, rr.scope, JSON.stringify(rr.items ?? null)])
     await Promise.allSettled(rows.map((r) => notifier.sendNotification(r.user_id, {
       title: 'Customer return request',
-      body: `A customer asked to return items from order ${rr.order_number}. Open it and tell Dealker what you think.`,
+      body: `A customer asked to return items from order ${rr.order_number}. Open it and tell Dealkr what you think.`,
       type: 'RETURN',
       data: { type: 'RETURN', refundRequestId: rr.id, orderId: rr.order_id, orderNumber: rr.order_number, vendorId: r.vendor_id },
       app: 'vendor',

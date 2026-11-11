@@ -15,12 +15,12 @@ CATIMG = {g["label"]: g["image_url"] for g in _tpl("category_hub")["config"]["ta
 for_chip = {c["label"]: c["image_url"] for c in _tpl("steal_deals")["config"]["tabs"][0]["chips"]}
 
 # category ids (live)
-C_MOBILE = "d057cdb7-a74d-4829-803d-3258a0569f68"
-C_HEAD = "c06f3dc3-ffd0-44be-b6c5-344cdddf31f4"
-C_WATCH = "ce9788bb-7add-4fc3-9cb0-f2c61d547b13"
-C_CHARGE = "4012e270-d5f3-478a-b7a4-3759eb831bce"
-C_SPEAK = "1eade306-4d82-4f06-b3bc-24df118fef7c"
-C_ACC = "2da15ccc-be64-43f7-971d-0b651c7efa95"
+C_MOBILE = "99907ba9-4e61-4265-91ff-19822dfa36ac"
+C_HEAD = "0b597ce6-a597-442b-81e7-3cd523c3d808"
+C_WATCH = "52f90366-ebec-425d-9ac8-7bd1534e5d33"
+C_CHARGE = "c111ea0d-3500-4aad-901b-07d0fac0733d"
+C_SPEAK = "53196082-2b79-4321-be69-985bfe56b289"
+C_ACC = "70b94986-4799-4adf-9c31-6095a9a55da4"
 
 
 def bind(cats=None, limit=12, sort="best_selling", **rules):
@@ -115,7 +115,7 @@ def mobile_mobile(up):
         promo(up, ["banners/mobile-mobile-1.png", "banners/mobile-mobile-2.png"]),
         fee(),
         hub("Shop by brand", [(b, BRANDS[b]["logo_url"], C_MOBILE, b) for b in
-                              ["Apple", "Samsung", "OnePlus", "Redmi", "realme", "Google"]]),
+                              ["Apple", "Samsung", "OnePlus", "Redmi", "realme", "Google"] if b in BRANDS]),
         deal("PHONE DEAL OF THE DAY", cats, 15),
         price_sale("Phones by budget", cats, [15000, 20000, 30000, 50000, 100000]),
         brands(["Apple", "Samsung", "OnePlus", "Redmi", "realme", "Google"], "Top Phone Brands"),
@@ -135,7 +135,7 @@ def mobile_headphones(up):
         promo(up, ["banners/mobile-headphones-1.png", "banners/mobile-headphones-2.png"]),
         fee(),
         hub("Shop by brand", [(b, BRANDS[b]["logo_url"], C_HEAD, b) for b in
-                              ["Apple", "Samsung", "Sony", "JBL", "boAt", "realme"]]),
+                              ["Apple", "Samsung", "Sony", "JBL", "boAt", "realme"] if b in BRANDS]),
         deal("AUDIO DEAL OF THE DAY", cats, 10),
         price_sale("Audio by budget", cats, [1999, 2999, 5000, 10000, 30000]),
         brands(["Sony", "JBL", "boAt", "Apple", "Samsung"], "Top Audio Brands"),

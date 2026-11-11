@@ -165,8 +165,8 @@ export const orderOverview = {
     if (sellerOrderId && !sel) throw err(404, 'Invoice not found', 'NOT_FOUND')
     const lines = (sel ? sel.items : d.sellers.flatMap((s) => s.items))
     const total = sel ? sel.money.subtotal : d.payment.breakdown.total
-    const title = sel ? 'Vendor tax invoice' : 'Dealker order invoice'
-    const from = sel ? `${sel.vendor.legal_name || sel.vendor.name}<br>GSTIN ${sel.vendor.gstin || '—'}<br>${sel.pickup.address}` : 'Dealker Marketplace<br>Bengaluru, Karnataka'
+    const title = sel ? 'Vendor tax invoice' : 'Dealkr order invoice'
+    const from = sel ? `${sel.vendor.legal_name || sel.vendor.name}<br>GSTIN ${sel.vendor.gstin || '—'}<br>${sel.pickup.address}` : 'Dealkr Marketplace<br>Bengaluru, Karnataka'
     const num = sel?.invoice?.number || `DK-${d.order.number}`
     return `<!doctype html><html><head><meta charset="utf-8"><title>${title} ${num}</title><style>
       body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#111;margin:40px;max-width:820px}h1{font-size:22px;margin:0}table{width:100%;border-collapse:collapse;margin-top:24px}
@@ -261,7 +261,7 @@ export const shipmentTracking = {
          VALUES ($1,$2,$3,$4,$5,$6,$7,'PICKUP_SCHEDULED','PICKUP_SCHEDULED',$8,$9) RETURNING id`,
         [sellerOrderId, provider, `MAN-${Date.now()}`, awb?.trim() || null, courierName.trim(), so.shipping_charge ?? 0, ord.payment_method === 'COD' ? ord.total_payable : 0,
           eta || null, trackingUrl || null])).rows[0]
-      await client.query(`INSERT INTO shipment_events (shipment_id, status, provider_status, note, event_location) VALUES ($1,'CREATED','CREATED','Shipment booked by Dealker team',NULL), ($1,'PICKUP_SCHEDULED','PICKUP_SCHEDULED',$2,NULL)`, [sh.id, `Pickup scheduled with ${courierName.trim()}`])
+      await client.query(`INSERT INTO shipment_events (shipment_id, status, provider_status, note, event_location) VALUES ($1,'CREATED','CREATED','Shipment booked by Dealkr team',NULL), ($1,'PICKUP_SCHEDULED','PICKUP_SCHEDULED',$2,NULL)`, [sh.id, `Pickup scheduled with ${courierName.trim()}`])
       await client.query(`UPDATE seller_orders SET shipment_id = $2, shipping_provider = $3, status = CASE WHEN status IN ('ORDER_PLACED','CONFIRMED') THEN 'PACKED' ELSE status END, fulfilment_status = CASE WHEN status IN ('ORDER_PLACED','CONFIRMED') THEN 'PACKED' ELSE fulfilment_status END, updated_at = NOW() WHERE id = $1`, [sellerOrderId, sh.id, provider])
       await client.query('COMMIT')
     } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e } finally { client.release() }

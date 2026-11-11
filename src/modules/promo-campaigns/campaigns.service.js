@@ -147,7 +147,7 @@ export class CampaignsService {
     const c = (await query(`${LIST_SQL} WHERE c.id = $1`, [id])).rows[0]
     if (!c) throw httpError(404, 'Campaign not found', 'NOT_FOUND')
     const listings = (await query(
-      `SELECT l.shop_product_id AS id, l.price_before, l.price_after, p.name, p.brand, COALESCE(v.name, 'Dealker') AS owner_name
+      `SELECT l.shop_product_id AS id, l.price_before, l.price_after, p.name, p.brand, COALESCE(v.name, 'Dealkr') AS owner_name
          FROM promo_campaign_listings l JOIN shop_products sp ON sp.id = l.shop_product_id JOIN products p ON p.id = sp.product_id
          LEFT JOIN vendors v ON v.id = p.owner_vendor_id WHERE l.campaign_id = $1 ORDER BY p.name LIMIT 100`, [id])).rows
     return {

@@ -8,7 +8,7 @@
  *
  * Inside Docker:  docker compose exec api node src/database/seeds/home-demo.js
  *
- * Tagging: every demo theme is named 'DEMO · …'; every demo tab belongs to one of the five Dealker store keys
+ * Tagging: every demo theme is named 'DEMO · …'; every demo tab belongs to one of the five Dealkr store keys
  * (nothing else uses those keys). --clear deletes those and nulls the store icons. Requires migration 191.
  */
 import fs from 'node:fs'

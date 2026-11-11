@@ -7,11 +7,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
  * Registered business details printed on every invoice / packing slip.
  */
 export const STORE_INFO = {
-  name: 'Dealker',
+  name: 'Dealkr',
   // ⚠ The address, GST number and phone below are still the old "Bakaloo"
   // (Surat) registration details — wrong on every real invoice/packing slip.
-  // They are legal/compliance fields and must come from Dealker's real
-  // business records, never guessed. Replace with Dealker's registered
+  // They are legal/compliance fields and must come from Dealkr's real
+  // business records, never guessed. Replace with Dealkr's registered
   // address, GST number and support phone.
   addressLines: [
     'Shop No. 27, Khari Faliyu, Ananddhara V-2 Road,',

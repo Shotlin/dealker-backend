@@ -101,7 +101,7 @@ const CHECKS = {
 
   SELLER_INFO(ctx) {
     const v = ctx.vendor
-    if (!v) return skip('Listed by Dealker')
+    if (!v) return skip('Listed by Dealkr')
     if (['VERIFIED', 'ACTIVE'].includes(v.status)) return pass(`Seller is ${v.status.toLowerCase()}`)
     return fail(`Seller status is ${String(v.status || 'unknown').toLowerCase().replace(/_/g, ' ')}`)
   },

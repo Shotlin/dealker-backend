@@ -176,6 +176,10 @@ export const supportService = {
         const o = await client.query(`SELECT 1 FROM orders WHERE id = $1 ${ownOnly ? 'AND customer_id = $2' : ''}`, ownOnly ? [orderId, userId] : [orderId])
         if (!o.rows[0]) throw httpError(404, 'Order not found', 'NOT_FOUND')
       }
+      // Keep the sequence ahead of every ticket number already in the table (restores / seeds can leave it behind).
+      await client.query(
+        `SELECT setval('support_ticket_seq', GREATEST((SELECT last_value FROM support_ticket_seq),
+           COALESCE((SELECT MAX(substring(ticket_number from '^TKT-(\\d+)$')::bigint) FROM support_tickets WHERE ticket_number ~ '^TKT-\\d+$'), 0)))`)
       const { rows: seq } = await client.query(`SELECT nextval('support_ticket_seq') AS n`)
       const number = `TKT-${seq[0].n}`
       const agentSide = senderType !== 'CUSTOMER'
@@ -261,7 +265,7 @@ export const supportService = {
                   customer_unread=customer_unread+1, agent_unread=0, first_response_at=COALESCE(first_response_at, NOW()), updated_at=NOW() WHERE id=$1`,
           [id, status, assignedTo, preview(text)])
         await client.query(
-          `INSERT INTO notifications (user_id, title, body, type, data) VALUES ($1,'Dealker Support replied',$2,'SUPPORT',$3)`,
+          `INSERT INTO notifications (user_id, title, body, type, data) VALUES ($1,'Dealkr Support replied',$2,'SUPPORT',$3)`,
           [t.user_id, preview(text), JSON.stringify({ ticketId: id, ticketNumber: t.ticket_number })])
       }
       await client.query('COMMIT')

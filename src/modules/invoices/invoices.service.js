@@ -17,7 +17,7 @@ const SELECT = `
   SELECT i.id, i.shop_product_id, i.product_id, i.vendor_id, i.invoice_number, to_char(i.invoice_date, 'YYYY-MM-DD') AS invoice_date,
          i.purchase_amount, i.gst_amount, i.supplier_name, i.imei_serial, i.file_name, i.mime_type,
          i.file_size, i.status, i.rejection_reason, i.verified_at, i.created_at,
-         p.name AS product_name, p.imei AS product_imei, COALESCE(v.name, 'Dealker') AS vendor_name,
+         p.name AS product_name, p.imei AS product_imei, COALESCE(v.name, 'Dealkr') AS vendor_name,
          vu.name AS verified_by_name, uu.name AS uploaded_by_name
     FROM listing_invoices i
     JOIN shop_products sp ON sp.id = i.shop_product_id

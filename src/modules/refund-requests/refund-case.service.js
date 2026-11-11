@@ -126,7 +126,7 @@ export const refundCaseService = {
       by_seller: t.channel === 'VENDOR_APP',
       messages: msgRows.filter((m) => m.ticket_id === t.id).map((m) => ({
         id: m.id, from: m.sender_type,
-        name: m.sender_type === 'CUSTOMER' ? (t.channel === 'VENDOR_APP' ? `${t.owner_name || 'Seller'} (seller)` : r.customer_name) : m.sender_type === 'SYSTEM' ? 'Dealker' : m.sender_name,
+        name: m.sender_type === 'CUSTOMER' ? (t.channel === 'VENDOR_APP' ? `${t.owner_name || 'Seller'} (seller)` : r.customer_name) : m.sender_type === 'SYSTEM' ? 'Dealkr' : m.sender_name,
         body: m.body, internal: m.is_internal, attachments: Array.isArray(m.attachments) ? m.attachments : [], at: m.created_at,
       })),
     }))

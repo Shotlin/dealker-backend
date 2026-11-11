@@ -19,10 +19,10 @@ const FLOW = {
 const NOTIFY = {
   START_REVIEW: ['KYC review started', 'Our team has started reviewing your documents.'],
   APPROVE: ['KYC approved', 'Your business has been verified.'],
-  ACTIVATE: ['Your store is live', 'You can now list products and sell on Dealker.'],
+  ACTIVATE: ['Your store is live', 'You can now list products and sell on Dealkr.'],
   REQUEST_CORRECTION: ['Action needed on your KYC', 'Please fix the issues noted and resubmit.'],
   REJECT: ['KYC rejected', 'Your application could not be approved.'],
-  SUSPEND: ['Your account is suspended', 'Please contact Dealker support.'],
+  SUSPEND: ['Your account is suspended', 'Please contact Dealkr support.'],
   REINSTATE: ['Your account is active again', 'You can continue selling.'],
 }
 

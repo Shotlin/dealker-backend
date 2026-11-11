@@ -6,7 +6,7 @@ import { sanitize } from "./middlewares/sanitize.js";
 import { installRouteCollector } from "./utils/permission-audit.js";
 
 /**
- * Dealker — Flipkart-style Indian multi-vendor marketplace API.
+ * Dealkr — Flipkart-style Indian multi-vendor marketplace API.
  *
  * Built on the meet-commerce-backend kernel (Fastify 4 + pg + Redis) with
  * grocery/quick-commerce/CRM subsystems removed. Modules follow the same
@@ -281,6 +281,9 @@ export const buildApp = async () => {
     const { olaMapsAdminRoutes, olaMapsPublicRoutes } = await import("./modules/ola-maps/ola-maps.routes.js");
     await app.register(olaMapsAdminRoutes, { prefix: "/api/v1/admin/ola-maps-settings" });
     await app.register(olaMapsPublicRoutes, { prefix: "/api/v1/maps/ola" });
+    const { devicesRoutes, devicesAdminRoutes } = await import("./modules/devices/devices.routes.js");
+    await app.register(devicesRoutes, { prefix: "/api/v1/devices" });
+    await app.register(devicesAdminRoutes, { prefix: "/api/v1/admin/devices" });
   }
 
   // Shiprocket settings [ADMIN] — dashboard-managed API-user credentials
@@ -619,7 +622,7 @@ export const buildApp = async () => {
   // Vendor abandoned carts — a vendor's own slice of idle B2C/B2B carts + targeted reminders
   const { default: vendorAbandonedCartsRoutes } = await import("./modules/vendor-abandoned-carts/vendor-abandoned-carts.routes.js");
   await app.register(vendorAbandonedCartsRoutes, { prefix: "/api/v1/manage/abandoned-carts" });
-  // Customer returns on a vendor's own order lines (view, answer, chat with Dealker Support)
+  // Customer returns on a vendor's own order lines (view, answer, chat with Dealkr Support)
   const { default: vendorReturnsRoutes } = await import("./modules/vendor-returns/vendor-returns.routes.js");
   await app.register(vendorReturnsRoutes, { prefix: "/api/v1/manage/returns" });
 

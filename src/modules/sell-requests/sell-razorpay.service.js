@@ -68,7 +68,7 @@ export async function createFundingOrder(actor, id) {
   }
   return {
     keyId: getRazorpayKeyId(), orderId: order.razorpay_order_id, amount: paise(amount), amountRupees: amount, currency: 'INR',
-    name: 'Dealker', description: `Phone purchase ${r.code}`, requestCode: r.code,
+    name: 'Dealkr', description: `Phone purchase ${r.code}`, requestCode: r.code,
   }
 }
 
@@ -234,14 +234,14 @@ export async function sendPayout(requestId) {
   const call = _xFetch.current
   try {
     const { rows: [u] } = await query('SELECT name FROM users WHERE id = $1', [r.user_id])
-    const name = text(d.holderName || u?.name || r.customer_name || 'Dealker seller', 80)
+    const name = text(d.holderName || u?.name || r.customer_name || 'Dealkr seller', 80)
     const contact = await call('/contacts', { name, type: 'customer', reference_id: r.code })
     const fund = r.payout_method === 'UPI'
       ? await call('/fund_accounts', { contact_id: contact.id, account_type: 'vpa', vpa: { address: d.upiId } })
       : await call('/fund_accounts', { contact_id: contact.id, account_type: 'bank_account', bank_account: { name, ifsc: d.ifsc, account_number: d.accountNumber } })
     const out = await call('/payouts', {
       account_number: env.RAZORPAYX_ACCOUNT_NUMBER, fund_account_id: fund.id, amount: paise(pay.amount), currency: 'INR',
-      mode: r.payout_method === 'UPI' ? 'UPI' : 'IMPS', purpose: 'payout', queue_if_low_balance: true, reference_id: r.code.slice(0, 40), narration: 'Dealker phone sale',
+      mode: r.payout_method === 'UPI' ? 'UPI' : 'IMPS', purpose: 'payout', queue_if_low_balance: true, reference_id: r.code.slice(0, 40), narration: 'Dealkr phone sale',
     }, { 'X-Payout-Idempotency': `sell-payout-${requestId}` })
     await query(`UPDATE sell_payments SET provider_ref = $2, updated_at = NOW() WHERE id = $1`, [pay.id, out.id])
     await tx(async (client) => addEvent(client, requestId, 'PAYOUT_SENT', 'Payment sent to your bank — waiting for confirmation', null, { payoutId: out.id }))

@@ -26,7 +26,7 @@ export class CartController {
     return reply.code(200).send(success(summary, 'Bill summary fetched'))
   }
 
-  /** GET /points — Dealker Points preview for the current cart (balance, redeemable now, earn estimate) */
+  /** GET /points — Dealkr Points preview for the current cart (balance, redeemable now, earn estimate) */
   async getPoints(request, reply) {
     const cart = await this.service.getCart(request.user.id, request.query?.priceMode)
     const { LoyaltyService } = await import('../loyalty/loyalty.service.js')

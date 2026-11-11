@@ -127,7 +127,7 @@ export class QcService {
     const total = (await query(`SELECT COUNT(*)::int n ${QUEUE_FROM}${w}`, params)).rows[0].n
     const { rows } = await query(
       `SELECT sp.id, p.name, p.brand, p.condition, p.thumbnail_url, p.imei,
-              COALESCE(v.name, 'Dealker') AS owner_name, c.name AS category_name,
+              COALESCE(v.name, 'Dealkr') AS owner_name, c.name AS category_name,
               COALESCE(sp.sale_price, sp.price) AS price, sp.approval_status,
               sp.qc_status, sp.qc_mode, sp.qc_score, sp.qc_notes, sp.qc_checked_at, sp.created_at,
               (SELECT COUNT(*)::int FROM listing_invoices i WHERE i.shop_product_id = sp.id AND i.status <> 'REJECTED') AS invoice_count
@@ -356,7 +356,7 @@ export class QcService {
     const { rows } = await query(
       `SELECT sp.id, sp.approval_status, sp.qc_status, sp.qc_mode, sp.qc_score, sp.qc_notes, sp.qc_checked_at,
               u.name AS qc_checked_by_name, p.name, p.brand, p.condition, p.imei, p.serial_number, p.thumbnail_url,
-              COALESCE(v.name, 'Dealker') AS owner_name, COALESCE(sp.sale_price, sp.price) AS price, sp.mrp
+              COALESCE(v.name, 'Dealkr') AS owner_name, COALESCE(sp.sale_price, sp.price) AS price, sp.mrp
          FROM shop_products sp JOIN products p ON p.id = sp.product_id
          LEFT JOIN vendors v ON v.id = p.owner_vendor_id
          LEFT JOIN users u ON u.id = sp.qc_checked_by

@@ -145,7 +145,7 @@ export class VendorSettlementsService {
   // ── Reads ─────────────────────────────────────────────────────────────
 
   /**
-   * Vendor: move money from the settlement balance into the vendor user's Dealker wallet.
+   * Vendor: move money from the settlement balance into the vendor user's Dealkr wallet.
    * Auction registration fees and winning-bid payments are charged to that wallet, and the
    * vendor app has no card/UPI top-up, so this is how earnings fund auctions.
    */
@@ -181,7 +181,7 @@ export class VendorSettlementsService {
       const ref = key || `wtx:${vendorId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`
       await client.query(
         `INSERT INTO settlement_ledger (vendor_id, entry_type, amount, balance_after, reason, actor_id, idempotency_key)
-         VALUES ($1, 'ADJUSTMENT', $2, $3, 'Moved to Dealker wallet', $4, $5)`,
+         VALUES ($1, 'ADJUSTMENT', $2, $3, 'Moved to Dealkr wallet', $4, $5)`,
         [vendorId, -amountRounded, Number((balance - amountRounded).toFixed(2)), userId || null, ref]
       )
       await client.query('INSERT INTO wallets (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING', [userId])
@@ -321,7 +321,7 @@ export class VendorSettlementsService {
     return rows[0] || null
   }
 
-  /** A vendor's own payouts (what Dealker sent or is sending to their bank). Internal notes and staff ids are never exposed. */
+  /** A vendor's own payouts (what Dealkr sent or is sending to their bank). Internal notes and staff ids are never exposed. */
   async vendorPayouts(vendorId, { status = '', page = 1, limit = 20 } = {}) {
     const lim = Math.min(100, Math.max(1, Number(limit) || 20))
     const pg = Math.max(1, Number(page) || 1)

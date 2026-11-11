@@ -109,7 +109,7 @@ function expireStale() {
   return expireRun
 }
 
-// ── Money (vendor settlement ledger = the "Dealker wallet") ──────────────────
+// ── Money (vendor settlement ledger = the "Dealkr wallet") ──────────────────
 
 const ledgerBalance = async (client, vendorId) =>
   Number((await client.query(`SELECT COALESCE(SUM(amount),0) AS b FROM settlement_ledger WHERE vendor_id=$1`, [vendorId])).rows[0].b)
@@ -201,7 +201,7 @@ const VARIANT_SQL = ['pro', 'max', 'plus', 'mini', 'ultra', 'fe', 'lite', 'se']
   .map((w) => `((' ' || r.model_key || ' ') LIKE '% ${w} %') = ((' ' || btrim(regexp_replace(lower(p.name), '[^a-z0-9]+', ' ', 'g')) || ' ') LIKE '% ${w} %')`).join(' AND ')
 
 const REQ_CARD = (extraSelect = '', extraJoin = '') => `
-  SELECT r.*, COALESCE(bv.name, 'Dealker') AS buyer_name, th.thumbnail_url, c.name AS category_name,
+  SELECT r.*, COALESCE(bv.name, 'Dealkr') AS buyer_name, th.thumbnail_url, c.name AS category_name,
          (SELECT COUNT(*)::int FROM b2b_quotes q WHERE q.requirement_id = r.id AND q.status <> 'WITHDRAWN') AS quote_count,
          (SELECT MIN(q.unit_price) FROM b2b_quotes q WHERE q.requirement_id = r.id AND q.status NOT IN ('WITHDRAWN','EXPIRED')) AS best_price,
          (SELECT COALESCE(SUM(q.quantity_offered),0)::int FROM b2b_quotes q WHERE q.requirement_id = r.id AND q.status NOT IN ('WITHDRAWN','EXPIRED')) AS quantity_offered_total
@@ -414,7 +414,7 @@ export const b2b = {
   /**
    * Buy a wholesale listing at its listed price. Runs the normal demand flow privately (one requirement, one quote at the
    * listed price, awarded at once) so escrow, dispatch, receipt, disputes and commission all work unchanged. The buyer then
-   * pays from the Dealker wallet via `/requirements/:id/pay`. Nothing is broadcast to other vendors.
+   * pays from the Dealkr wallet via `/requirements/:id/pay`. Nothing is broadcast to other vendors.
    */
   async wholesaleBuy(listingId, quantity, actor) {
     const qty = Number(quantity)
@@ -487,7 +487,7 @@ export const b2b = {
     }
     return {
       keyId: getRazorpayKeyId(), orderId: order.razorpay_order_id, amount: paise(amount), amountRupees: amount, currency: 'INR',
-      name: 'Dealker', description: `Wholesale order${rows.length === 1 ? ` ${rows[0].requirement_number}` : ` · ${rows.length} items`}`, requirementIds: ids,
+      name: 'Dealkr', description: `Wholesale order${rows.length === 1 ? ` ${rows[0].requirement_number}` : ` · ${rows.length} items`}`, requirementIds: ids,
     }
   },
 
@@ -760,7 +760,7 @@ export const b2b = {
          LEFT JOIN LATERAL (SELECT seller_rating, city FROM shops WHERE vendor_id = v.id ORDER BY created_at LIMIT 1) s ON true
         WHERE q.requirement_id=$1 ${full ? '' : 'AND q.seller_vendor_id=$2'} ORDER BY q.unit_price ASC, q.created_at`, full ? [id] : [id, viewer.vendorId])).rows
     const orows = (await query(
-      `SELECT o.*, sv.name AS seller_name, COALESCE(bv.name,'Dealker') AS buyer_name FROM b2b_orders o JOIN vendors sv ON sv.id=o.seller_vendor_id LEFT JOIN vendors bv ON bv.id=o.buyer_vendor_id
+      `SELECT o.*, sv.name AS seller_name, COALESCE(bv.name,'Dealkr') AS buyer_name FROM b2b_orders o JOIN vendors sv ON sv.id=o.seller_vendor_id LEFT JOIN vendors bv ON bv.id=o.buyer_vendor_id
         WHERE o.requirement_id=$1 ${full ? '' : 'AND o.seller_vendor_id=$2'} ORDER BY o.created_at`, full ? [id] : [id, viewer.vendorId])).rows
     const events = full ? (await query(`SELECT type, actor_label, note, order_id, created_at FROM b2b_events WHERE requirement_id=$1 ORDER BY created_at`, [id])).rows : []
     const payment = full ? (await query(`SELECT * FROM b2b_payments WHERE requirement_id=$1 ORDER BY created_at DESC LIMIT 1`, [id])).rows[0] ?? null : null
@@ -884,13 +884,13 @@ export const b2b = {
 
   // ── Escrow payment ───────────────────────────────────────────────────
   /**
-   * Vendors pay from the Dealker wallet (their settlement balance): the money leaves their ledger now and is
+   * Vendors pay from the Dealkr wallet (their settlement balance): the money leaves their ledger now and is
    * held in escrow until the buyer confirms receipt. Admins can also record a payment taken outside the app.
    */
   async pay(requirementId, { method, reference = null }, actor) {
     const m = String(method || (actor.isAdmin ? 'ONLINE' : 'WALLET')).toUpperCase()
     if (!actor.isAdmin && !PAY_METHODS_VENDOR.includes(m)) {
-      throw err(400, 'Pay from your Dealker wallet. Other payment methods are not available yet.', 'METHOD_UNAVAILABLE')
+      throw err(400, 'Pay from your Dealkr wallet. Other payment methods are not available yet.', 'METHOD_UNAVAILABLE')
     }
     const client = await getClient()
     try {
@@ -1011,7 +1011,7 @@ export const b2b = {
       } else {
         await client.query(`UPDATE b2b_orders SET status='DISPUTED', dispute_status='OPEN', dispute_reason=$2, updated_at=NOW() WHERE id=$1`, [orderId, note || (got < o.quantity ? `Received ${got} of ${o.quantity}` : 'Item not as described')])
         await event(client, o.requirement_id, o.id, 'DISPUTED', actor, note || `Received ${got} of ${o.quantity}`)
-        await notifyVendors(client, [o.seller_vendor_id], 'Buyer reported an issue', `${o.order_number}: ${note || `received ${got} of ${o.quantity}`}. Dealker will review and resolve it.`, { orderId, kind: 'B2B_DISPUTE' })
+        await notifyVendors(client, [o.seller_vendor_id], 'Buyer reported an issue', `${o.order_number}: ${note || `received ${got} of ${o.quantity}`}. Dealkr will review and resolve it.`, { orderId, kind: 'B2B_DISPUTE' })
       }
       await finishRequirementIfDone(client, o.requirement_id)
       await commit(client)
@@ -1062,7 +1062,7 @@ export const b2b = {
     const base = `FROM b2b_orders o JOIN b2b_requirements r ON r.id=o.requirement_id JOIN vendors sv ON sv.id=o.seller_vendor_id LEFT JOIN vendors bv ON bv.id=o.buyer_vendor_id ${w}`
     const cnt = await query(`SELECT COUNT(*)::int n ${base}`, params)
     const { rows } = await query(
-      `SELECT o.*, r.product_name, r.requirement_number, r.storage, r.model_key, sv.name AS seller_name, COALESCE(bv.name,'Dealker') AS buyer_name,
+      `SELECT o.*, r.product_name, r.requirement_number, r.storage, r.model_key, sv.name AS seller_name, COALESCE(bv.name,'Dealkr') AS buyer_name,
               (SELECT p.thumbnail_url FROM products p WHERE p.deleted_at IS NULL AND p.thumbnail_url IS NOT NULL AND COALESCE(r.model_key,'') <> ''
                   AND (' ' || btrim(regexp_replace(lower(p.name), '[^a-z0-9]+', ' ', 'g')) || ' ') LIKE '% ' || r.model_key || ' %' LIMIT 1) AS thumbnail_url
          ${base} ORDER BY (o.status='DISPUTED') DESC, o.created_at DESC LIMIT ${lim} OFFSET ${off}`, params)
@@ -1092,7 +1092,7 @@ export const b2b = {
       order: { ...stripInvoicePath(o), unit_price: n(o.unit_price), subtotal: n(o.subtotal), commission_percent: n(o.commission_percent), commission_amount: n(o.commission_amount), seller_payable: n(o.seller_payable), released_amount: n(o.released_amount) },
       requirement: num(r),
       seller: { name: seller?.name, ...(paid && !isSeller ? { phone: seller?.phone, city: seller?.city, pincode: seller?.pincode, address: seller?.address } : { city: seller?.city }) },
-      buyer: buyer ? { name: buyer.name, ...(paid && !isBuyer ? { phone: buyer.phone } : {}) } : { name: 'Dealker' },
+      buyer: buyer ? { name: buyer.name, ...(paid && !isBuyer ? { phone: buyer.phone } : {}) } : { name: 'Dealkr' },
       payment: payment ? { ...payment, amount: Number(payment.amount) } : null,
       events,
       viewer: { isBuyer: Boolean(isBuyer), isSeller: Boolean(isSeller), isAdmin: Boolean(viewer.isAdmin) },
@@ -1103,7 +1103,7 @@ export const b2b = {
   async walletFor(vendorId) {
     const balance = await ledgerBalance({ query }, vendorId)
     const hold = (await query(`SELECT 1 FROM settlement_holds WHERE vendor_id=$1 AND is_active=TRUE LIMIT 1`, [vendorId])).rows[0]
-    return { balance: Math.max(0, round2(balance)), onHold: Boolean(hold), methods: [{ id: 'WALLET', label: 'Dealker wallet', available: !hold }] }
+    return { balance: Math.max(0, round2(balance)), onHold: Boolean(hold), methods: [{ id: 'WALLET', label: 'Dealkr wallet', available: !hold }] }
   },
 
   // ── Admin overview ───────────────────────────────────────────────────
@@ -1180,7 +1180,7 @@ export const b2b = {
          FROM rr GROUP BY rr.mkey ORDER BY units_needed DESC, requests DESC LIMIT 10`, [d])).rows
     const waiting = (await query(
       `SELECT r.id, r.requirement_number, r.product_name, r.quantity_needed, r.target_price, r.target_price_max, r.created_at, r.response_deadline, r.status, r.is_urgent,
-              COALESCE(bv.name, 'Dealker') AS buyer_name,
+              COALESCE(bv.name, 'Dealkr') AS buyer_name,
               (SELECT COALESCE(SUM(views),0)::int FROM b2b_requirement_views v WHERE v.requirement_id = r.id) AS view_count
          FROM b2b_requirements r LEFT JOIN vendors bv ON bv.id = r.buyer_vendor_id
         WHERE r.created_at >= ${since} AND r.status IN ('OPEN','EXPIRED') AND r.quantity_awarded = 0

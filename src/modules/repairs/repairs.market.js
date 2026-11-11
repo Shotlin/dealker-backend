@@ -601,7 +601,7 @@ export const confirmPrice = (actor, id) => tx(async (client) => {
   if (actor.kind === 'CUSTOMER') throw new RepairError('FORBIDDEN', 'Only repair staff can do this', 403)
   const r = await lock(client, id, actor)
   if (r.status !== 'INSPECTION') throw new RepairError('INVALID_STATE', 'The price can be confirmed once the device is received for inspection', 409)
-  if (!r.selected_offer_id) throw new RepairError('NO_AGREED_PRICE', 'No repair price has been set for this job yet. Ask Dealker support to set the price from the dashboard.', 409)
+  if (!r.selected_offer_id) throw new RepairError('NO_AGREED_PRICE', 'No repair price has been set for this job yet. Ask Dealkr support to set the price from the dashboard.', 409)
   const { rows: o } = await client.query('SELECT * FROM repair_offers WHERE id = $1', [r.selected_offer_id])
   const offer = o[0]
   if (!offer) throw new RepairError('NOT_FOUND', 'Offer not found', 404)
@@ -673,29 +673,37 @@ export async function tracking(actor, requestId) {
 
 // ── booking-form helpers ────────────────────────────────────────────────
 
-/** Brand tiles: brands from the device catalogue plus any brand a repair shop has priced. */
+/** Brand tiles: every brand of the device catalogue (with its logo) plus any brand a repair shop has priced. */
 export async function catalogueBrands({ category } = {}) {
   const cat = CATEGORIES.includes(category) ? category : null
   const { rows } = await query(
-    `SELECT brand AS name, MAX(brand_logo_url) AS logo_url, COUNT(*)::int AS models FROM sell_device_models
-      WHERE is_active AND brand IS NOT NULL AND ($1::text IS NULL OR category = $1) GROUP BY brand
+    `SELECT b.name, b.slug, b.logo_url, b.popular, b.sort_order, COUNT(m.id)::int AS models
+       FROM device_brands b
+       JOIN sell_device_models m ON lower(m.brand) = lower(b.name) AND m.is_active AND m.repair_enabled AND ($1::text IS NULL OR m.category = $1)
+      WHERE b.is_active GROUP BY b.id
      UNION ALL
-     SELECT s.brand, NULL, 0 FROM repair_vendor_services s WHERE s.is_active AND ($1::text IS NULL OR s.device_category = $1)
-        AND NOT EXISTS (SELECT 1 FROM sell_device_models m WHERE m.is_active AND lower(m.brand) = lower(s.brand))
+     SELECT s.brand, lower(regexp_replace(s.brand, '[^A-Za-z0-9]+', '', 'g')), NULL, FALSE, 9999, 0 FROM repair_vendor_services s
+      WHERE s.is_active AND ($1::text IS NULL OR s.device_category = $1)
+        AND NOT EXISTS (SELECT 1 FROM device_brands d WHERE d.is_active AND lower(d.name) = lower(s.brand))
       GROUP BY s.brand
-     ORDER BY 3 DESC, 1`, [cat])
-  return rows.map((r) => ({ name: r.name, logoUrl: r.logo_url, models: r.models }))
+     ORDER BY 4 DESC, 5, 1`, [cat])
+  return rows.map((r) => ({ name: r.name, slug: r.slug, logoUrl: r.logo_url, popular: !!r.popular, models: r.models }))
 }
 
+/** Models of one brand (grouped by series in the app) — or a catalogue-wide search when only `q` is given. Storage is optional in repair. */
 export async function catalogueModels({ brand, q, category } = {}) {
   const b = text(brand, 60)
-  if (!b) throw new RepairError('VALIDATION', 'Choose a brand', 422)
+  const search = q ? text(q, 60) : ''
+  if (!b && !search) throw new RepairError('VALIDATION', 'Choose a brand', 422)
   const cat = CATEGORIES.includes(category) ? category : null
   const { rows } = await query(
-    `SELECT name, category, image_url FROM sell_device_models
-      WHERE is_active AND lower(brand) = lower($1) AND ($2::text IS NULL OR category = $2) AND ($3::text IS NULL OR name ILIKE $3)
-      ORDER BY name LIMIT 200`, [b, cat, q ? `%${text(q, 60)}%` : null])
-  return rows.map((r) => ({ name: r.name, category: r.category, imageUrl: r.image_url }))
+    `SELECT m.id, m.name, m.category, m.image_url, m.series, m.brand, m.brand_logo_url, m.variants
+       FROM sell_device_models m LEFT JOIN device_brands d ON lower(d.name) = lower(m.brand)
+      WHERE m.is_active AND m.repair_enabled AND ($1::text IS NULL OR lower(m.brand) = lower($1)) AND ($2::text IS NULL OR m.category = $2)
+        AND ($3::text IS NULL OR m.name ILIKE $3 OR m.brand ILIKE $3 OR (m.brand || ' ' || m.name) ILIKE $3)
+      ORDER BY COALESCE(d.sort_order, 9999), m.display_order, m.name LIMIT $4`,
+    [b || null, cat, search ? `%${search}%` : null, b ? 500 : 60])
+  return rows.map((r) => ({ id: r.id, name: r.name, category: r.category, imageUrl: r.image_url, series: r.series, brand: r.brand, brandLogoUrl: r.brand_logo_url, storages: r.variants }))
 }
 
 /** "My recent devices": distinct devices the customer has already repaired or requested. */

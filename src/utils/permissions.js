@@ -153,7 +153,7 @@ const CANONICAL_PERMISSION_LIST = Object.freeze([
   'orders.override',
   // ── Reports ────────────────────────────────────────────────────────────
   'reports.view',
-  // ── Marketplace (Dealker) ──────────────────────────────────────────────
+  // ── Marketplace (Dealkr) ──────────────────────────────────────────────
   'seller_orders.view',
   'seller_orders.manage',
   'marketplace.listings.view',

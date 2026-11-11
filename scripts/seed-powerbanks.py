@@ -12,7 +12,7 @@ P = {"Chargers & Power Banks": [
     ("B0DWSS3Q5K", "Ambrane 10000mAh Slim Powerbank with Built-in Type-C Cable (Stylo N10)", "Ambrane"),
     ("B0CQK43DGH", "Portronics Luxcell B 10K 10000mAh 22.5W Fast Charging Power Bank", "Portronics"),
     ("B0D73XBQRW", "Xiaomi Power Bank 4i 10000mAh 22.5W Fast Charging", "Xiaomi")]}
-ROOT_ID = None
+ROOT_ID = os.environ.get("ROOT_ID")
 
 def call(method, path, body=None):
     req = urllib.request.Request(API + path, method=method, data=json.dumps(body).encode() if body is not None else None,

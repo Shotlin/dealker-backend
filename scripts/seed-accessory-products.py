@@ -19,7 +19,7 @@ P = {
         ("B0FWCT5BVY", "SupCares Tempered Glass for OnePlus Nord CE 4 with Installation Kit", "SupCares"),
         ("B0CWNN78MB", "Skyddshield Gorilla Tempered Glass for Redmi Note 13 / Poco X6 Neo", "Skyddshield")],
 }
-ROOT_ID = "2da15ccc-be64-43f7-971d-0b651c7efa95"  # Accessories & Storage
+ROOT_ID = os.environ.get("ROOT_ID")
 
 def call(method, path, body=None):
     req = urllib.request.Request(API + path, method=method, data=json.dumps(body).encode() if body is not None else None,

@@ -119,7 +119,9 @@ export async function isVendorStaffActive(userId, vendorId, { onboarding = false
   })
 
   const active = rows.length > 0
-  await cacheSet(cacheKey, active, VENDOR_STAFF_ACTIVE_TTL_SECONDS)
+  // Only remember "active": a vendor whose KYC/shop was approved a moment ago must work immediately, not after the
+  // 5-minute cache of an earlier "not active yet" answer runs out.
+  if (active) await cacheSet(cacheKey, active, VENDOR_STAFF_ACTIVE_TTL_SECONDS)
   return active
 }
 

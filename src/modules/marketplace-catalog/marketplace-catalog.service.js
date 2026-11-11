@@ -87,7 +87,7 @@ export class MarketplaceCatalogService {
        SELECT m.product_id, m.listing_id, m.shop_id,
               p.name, p.slug, p.brand, p.thumbnail, p.images, p.rating_avg, p.rating_count,
               p.condition, p.condition_notes, p.usage_duration, p.battery_health, p.warranty_info, p.owner_type,
-              COALESCE(v.name, 'Dealker') AS seller_name,
+              COALESCE(v.name, 'Dealkr') AS seller_name,
               p.gst_rate, p.return_policy_days, p.category_id,
               sp.price AS list_price, sp.sale_price, sp.mrp, sp.stock_quantity,
               sp.cod_eligible, sp.nationwide_shipping_enabled, sp.local_delivery_enabled,
