@@ -478,7 +478,8 @@ export async function listCampaigns(actor, { status = '', q = '', vendorId = nul
               (SELECT COUNT(*)::int FROM ad_campaign_products WHERE campaign_id = c.id) AS product_count,
               (SELECT COUNT(*)::int FROM ad_keywords WHERE campaign_id = c.id AND NOT is_negative) AS keyword_count,
               COALESCE((SELECT SUM(spend) FROM ad_stats_daily WHERE campaign_id = c.id AND day = ${IST_DAY_SQL}), 0) AS spent_today,
-              a.impressions_30d, a.clicks_30d, a.spend_30d
+              a.impressions_30d, a.clicks_30d, a.spend_30d,
+              COALESCE((SELECT balance FROM ad_wallets WHERE vendor_id = c.vendor_id), 0) AS wallet_balance
          FROM ad_campaigns c JOIN vendors v ON v.id = c.vendor_id
          LEFT JOIN LATERAL (SELECT ${AGG_30D} FROM ad_stats_daily st WHERE st.campaign_id = c.id AND st.day >= ${IST_DAY_SQL} - 29) a ON TRUE
         WHERE ${where.join(' AND ')}
@@ -505,6 +506,7 @@ function serializeCampaignRow(r) {
     default_bid: Number(r.default_bid), daily_budget: Number(r.daily_budget),
     total_budget: r.total_budget == null ? null : Number(r.total_budget), spent_today: Number(r.spent_today),
     impressions_30d: impressions, clicks_30d: clicks, spend_30d: spend,
+    wallet_balance: Number(r.wallet_balance ?? 0),
     ctr_30d: impressions ? clicks / impressions : 0, avg_cpc_30d: clicks ? spend / clicks : 0,
   }
 }

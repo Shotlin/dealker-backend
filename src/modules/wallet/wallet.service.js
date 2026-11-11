@@ -324,7 +324,7 @@ export class WalletService {
    * Internal only: add money to wallet without a payment gateway.
    * Use this for refunds or admin/manual credits, never for customer top-ups.
    */
-  async addMoney(userId, { amount, description, referenceId, subType, sourceId, orderId }) {
+  async addMoney(userId, { amount, description, referenceId, subType, sourceId, orderId, skipMaxBalance = false }) {
     const client = await getClient()
 
     try {
@@ -336,7 +336,9 @@ export class WalletService {
         return { success: false, message: 'Failed to create wallet' }
       }
 
-      const { maxWalletBalance } = await this.walletSettingsService.getConfig()
+      // The cap limits what a CUSTOMER can hold from top-ups/transfers; an admin credit (refund,
+      // goodwill, correction) must never be blocked by it.
+      const { maxWalletBalance } = skipMaxBalance ? { maxWalletBalance: null } : await this.walletSettingsService.getConfig()
 
       const result = await this.repo.credit(
         client,
@@ -674,6 +676,7 @@ export class WalletService {
       amount,
       description: description || 'Admin credit',
       referenceId,
+      skipMaxBalance: true,
     })
   }
 

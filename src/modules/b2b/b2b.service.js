@@ -348,7 +348,7 @@ export const b2b = {
                   LEFT JOIN vendor_profiles vp ON vp.vendor_id = v.id WHERE ${where.join(' AND ')}`
     const facetBase = `FROM shop_products sp JOIN products p ON p.id = sp.product_id JOIN vendors v ON v.id = p.owner_vendor_id WHERE ${facetWhere}`
     const [{ rows }, { rows: cnt }, { rows: fb }, { rows: fc }] = await Promise.all([
-      query(`SELECT sp.id, p.name, p.brand, p.condition, p.thumbnail_url, p.specifications->>'storage' AS storage, p.battery_health,
+      query(`SELECT sp.id, p.id AS product_id, p.name, p.brand, p.condition, p.thumbnail_url, p.specifications->>'storage' AS storage, p.battery_health,
                     sp.wholesale_price, sp.min_order_qty AS moq, sp.stock_quantity AS stock, sp.b2b_discount_pct, sp.price AS retail_price,
                     v.id AS seller_id, v.name AS seller_name, vp.city AS seller_city, v.avg_rating AS seller_rating
                ${base} ORDER BY ${order} LIMIT ${lim} OFFSET ${off}`, params),
@@ -359,7 +359,7 @@ export const b2b = {
     return {
       facets: { brands: fb.map((r) => ({ value: r.value, count: r.n })), conditions: fc.map((r) => ({ value: r.value, count: r.n })) },
       data: rows.map((r) => ({
-        id: r.id, name: r.name, brand: r.brand, condition: r.condition, thumbnail_url: r.thumbnail_url, storage: r.storage,
+        id: r.id, product_id: r.product_id, name: r.name, brand: r.brand, condition: r.condition, thumbnail_url: r.thumbnail_url, storage: r.storage,
         battery_health: r.battery_health != null ? Number(r.battery_health) : null, wholesale_price: Number(r.wholesale_price),
         retail_price: r.retail_price != null ? Number(r.retail_price) : null, moq: Number(r.moq || 1), stock: Number(r.stock),
         discount_pct: r.b2b_discount_pct != null ? Number(r.b2b_discount_pct) : null,
