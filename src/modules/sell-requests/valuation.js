@@ -7,24 +7,34 @@
 
 export const SCRATCHES = Object.freeze(['NONE', 'MINOR', 'MAJOR'])
 
-/** Deduction rules (percent of base). Overridable per-key from `sell_settings.rules`. */
+/**
+ * Deduction rules (percent of the Grade-A base price). Defaults follow the market buyback matrix
+ * (Flipkart Reset / Amazon Exchange / Cashify): screen -10..-45, battery 0/-8/-15, body -7/-22,
+ * hardware & biometrics -20..-40, bill + original box +3..+5 bonus. Overridable per-key from `sell_settings.rules`.
+ */
 export const DEFAULT_RULES = Object.freeze({
   notPoweringOn: 55,
-  ageFreeMonths: 6,
-  agePctPerMonth: 0.9,
-  ageMaxPct: 30,
-  minorScratches: 5,
-  majorScratches: 14,
-  bodyDents: 8,
+  ageFreeMonths: 120,       // the base price already tracks the model's age, so no extra age cut by default
+  agePctPerMonth: 0,
+  ageMaxPct: 0,
+  minorScratches: 10,       // screen: minor scratches
+  majorScratches: 45,       // screen: heavy cracks / dead pixels
+  bodyDents: 7,             // body: minor scuffs / dents
+  bentFrame: 22,            // body: bent frame / cracked back (inspection: POOR)
   screenReplaced: 10,
   skinReplaced: 4,
-  batteryHealthFloor: 85,
-  batteryPctPerPoint: 0.5,
-  noBill: 4,
-  noBox: 2,
-  noCharger: 3,
-  faceIdIssue: 10,
-  cameraIssue: 8,
+  batteryHealthFloor: 85,   // 85%+ full → no cut
+  batteryMidFloor: 80,      // 80–84% → batteryMidPct, below 80% (service) → batteryLowPct
+  batteryMidPct: 8,
+  batteryLowPct: 15,
+  noBill: 0,
+  noBox: 0,
+  noCharger: 2,
+  billBoxBonus: 4,          // valid bill + original box: price goes UP by this % (3–5)
+  billBoxBonusMinBase: 20000, // ...only for phones whose base price is at least this
+  faceIdIssue: 30,          // Face ID / Touch ID / True Tone fault (20–40)
+  cameraIssue: 20,          // camera fault
+  functionFault: 8,         // any other failed function check at inspection (each)
   // condition bands: total deduction % at or below → grade
   excellentMaxPct: 8,
   goodMaxPct: 22,
@@ -93,15 +103,18 @@ export function valuate(base, qa, overrides = {}, maxTotalPct = 85) {
   if (qa.faceIdIssue) d.push({ label: 'Face ID / fingerprint issue', pct: r.faceIdIssue })
   if (qa.cameraIssue) d.push({ label: 'Camera issue', pct: r.cameraIssue })
   if (qa.batteryHealth < r.batteryHealthFloor) {
-    d.push({ label: `Battery health ${qa.batteryHealth}%`, pct: Math.round((r.batteryHealthFloor - qa.batteryHealth) * r.batteryPctPerPoint) })
+    d.push({ label: `Battery health ${qa.batteryHealth}%`, pct: qa.batteryHealth >= r.batteryMidFloor ? r.batteryMidPct : r.batteryLowPct })
   }
+  if (qa.bentFrame) d.push({ label: 'Bent frame / cracked back', pct: r.bentFrame })
+  for (const f of qa.failedFunctions || []) d.push({ label: `${f} not working`, pct: r.functionFault })
   if (!qa.billAvailable) d.push({ label: 'No bill', pct: r.noBill })
   if (!qa.boxAvailable) d.push({ label: 'No box', pct: r.noBox })
   if (!qa.chargerAvailable) d.push({ label: 'No charger', pct: r.noCharger })
+  if (qa.billAvailable && qa.boxAvailable && Number(base) >= r.billBoxBonusMinBase) d.push({ label: 'Original bill + box bonus', pct: -r.billBoxBonus })
 
-  const deductions = d.filter((x) => x.pct > 0)
+  const deductions = d.filter((x) => x.pct !== 0)
   const totalPct = Math.min(maxTotalPct, deductions.reduce((n, x) => n + x.pct, 0))
-  const value = Math.round((Number(base) * (1 - totalPct / 100)) / 100) * 100
+  const value = Math.max(0, Math.round((Number(base) * (1 - totalPct / 100)) / 100) * 100)
   const condition = totalPct <= r.excellentMaxPct ? 'EXCELLENT' : totalPct <= r.goodMaxPct ? 'GOOD' : totalPct <= r.fairMaxPct ? 'FAIR' : 'POOR'
   return { value, condition, totalPct, deductions }
 }
@@ -120,4 +133,28 @@ export function isValidImei(v) {
     sum += n
   }
   return sum % 10 === 0
+}
+
+/**
+ * What an inspection found, applied to the customer's declared answers (the inspector is the authority).
+ * Returns the answers to re-price with.
+ */
+export function qaFromInspection(declared, f = {}) {
+  const qa = { ...declared, failedFunctions: [] }
+  const screen = f.screenCondition
+  if (screen) qa.screenScratches = screen === 'FLAWLESS' ? 'NONE' : screen === 'MINOR_SCRATCHES' ? 'MINOR' : 'MAJOR'
+  if (f.physicalCondition) {
+    qa.bodyDents = f.physicalCondition === 'FAIR'
+    qa.bentFrame = f.physicalCondition === 'POOR'
+  }
+  if (f.batteryHealth != null) qa.batteryHealth = Math.max(30, Math.min(100, Number(f.batteryHealth)))
+  for (const [k, ok] of Object.entries(f.functionality || {})) {
+    if (ok !== false) continue
+    const name = k.replace(/([A-Z])/g, ' $1').trim().toLowerCase()
+    if (/face|touch|finger|biometric|truetone|true tone/.test(name)) qa.faceIdIssue = true
+    else if (/camera/.test(name)) qa.cameraIssue = true
+    else if (/power|boot|turn on/.test(name)) qa.powersOn = false
+    else qa.failedFunctions.push(name.replace(/^./, (c) => c.toUpperCase()))
+  }
+  return qa
 }

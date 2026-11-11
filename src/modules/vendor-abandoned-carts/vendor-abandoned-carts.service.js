@@ -141,6 +141,8 @@ export async function detail(vendorId, id) {
     repo.sliceItems(vendorId, id), repo.vendorReminders(vendorId, id), repo.publicEvents(id), repo.vendorName(vendorId),
   ])
   const elig = await eligibility(vendorId, ep)
+  const { couponsFor, couponEligibility, COUPON_RULES } = await import('./vendor-abandoned-carts.coupons.js')
+  const [coupons, couponElig] = await Promise.all([couponsFor(vendorId, id), couponEligibility(vendorId, ep)])
   const lines = items.map((i) => ({
     product_id: i.product_id,
     name: i.product_name,
@@ -167,6 +169,11 @@ export async function detail(vendorId, id) {
     abandoned_at: ep.abandoned_at,
     total: lines.reduce((n, l) => n + l.line_total, 0),
     items: lines,
+    coupons,
+    coupon: {
+      ...couponElig,
+      rules: { max_percent: COUPON_RULES.maxPercent, max_flat_share_of_line: COUPON_RULES.maxFlatShareOfLine, valid_days: COUPON_RULES.validDays, max_per_cart: COUPON_RULES.maxPerCart },
+    },
     timeline,
     reminder: {
       ...elig,

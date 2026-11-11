@@ -1,3 +1,4 @@
+import { reserveUnits, attachOrder, releaseForOrder, setOrderUnits, orderUnits, releaseNos } from '../listing-units/units.service.js'
 import crypto from 'node:crypto'
 import { query, getClient } from '../../config/database.js'
 import { razorpay, getRazorpayKeyId, getRazorpayKeySecret } from '../../config/razorpay.js'
@@ -338,7 +339,9 @@ export const b2b = {
     // Facets (brands / conditions on offer) are counted before the brand + condition filters, so the pickers keep every option.
     const facetWhere = where.join(' AND '); const facetParams = [...params]
     if (brand) where.push(`lower(p.brand) = lower(${p_(String(brand).slice(0, 60))})`)
-    if (condition && COND.includes(condition)) where.push(`p.condition = ${p_(condition)}`)
+    // `condition` may be one value or a comma list (the app's tabs: Brand new = NEW,OPEN_BOX · Used = USED_*).
+    const conds = String(condition || '').split(',').map((c) => c.trim()).filter((c) => COND.includes(c))
+    if (conds.length) where.push(`p.condition = ANY(${p_(conds)}::text[])`)
     const order = { price_low: 'sp.wholesale_price ASC', price_high: 'sp.wholesale_price DESC', stock: 'sp.stock_quantity DESC', discount: 'sp.b2b_discount_pct DESC NULLS LAST, sp.created_at DESC' }[sort] || 'sp.created_at DESC'
     const lim = Math.min(50, Math.max(1, Number(limit) || 20)); const off = (Math.max(1, Number(page) || 1) - 1) * lim
     const base = `FROM shop_products sp JOIN products p ON p.id = sp.product_id JOIN vendors v ON v.id = p.owner_vendor_id
@@ -394,7 +397,7 @@ export const b2b = {
 
   async wholesaleDetail(vendorId, listingId) {
     const { rows } = await query(
-      `SELECT sp.id, p.name, p.brand, p.condition, p.condition_notes, p.description, p.thumbnail_url, p.images, p.specifications, p.warranty_info, p.battery_health,
+      `SELECT sp.id, p.id AS product_id, p.highlights, p.name, p.brand, p.condition, p.condition_notes, p.description, p.thumbnail_url, p.images, p.specifications, p.warranty_info, p.battery_health,
               sp.wholesale_price, sp.min_order_qty AS moq, sp.stock_quantity AS stock, sp.b2b_discount_pct, sp.b2b_notes, sp.handling_time_days,
               v.id AS seller_id, v.name AS seller_name, vp.city AS seller_city, vp.state AS seller_state, v.avg_rating AS seller_rating, v.review_count AS seller_reviews
          FROM shop_products sp JOIN products p ON p.id = sp.product_id JOIN vendors v ON v.id = p.owner_vendor_id LEFT JOIN vendor_profiles vp ON vp.vendor_id = v.id
@@ -403,7 +406,8 @@ export const b2b = {
     const r = rows[0]
     if (!r) throw err(404, 'This listing is not available', 'NOT_FOUND')
     return {
-      id: r.id, name: r.name, brand: r.brand, condition: r.condition, condition_notes: r.condition_notes, description: r.description, thumbnail_url: r.thumbnail_url,
+      id: r.id, product_id: r.product_id, highlights: r.highlights && typeof r.highlights === 'object' ? r.highlights : {},
+      name: r.name, brand: r.brand, condition: r.condition, condition_notes: r.condition_notes, description: r.description, thumbnail_url: r.thumbnail_url,
       images: Array.isArray(r.images) ? r.images : [], specifications: r.specifications || {}, warranty_info: r.warranty_info, battery_health: r.battery_health != null ? Number(r.battery_health) : null,
       wholesale_price: Number(r.wholesale_price), moq: Number(r.moq || 1), stock: Number(r.stock), discount_pct: r.b2b_discount_pct != null ? Number(r.b2b_discount_pct) : null,
       notes: r.b2b_notes, handling_days: r.handling_time_days,
@@ -416,7 +420,7 @@ export const b2b = {
    * listed price, awarded at once) so escrow, dispatch, receipt, disputes and commission all work unchanged. The buyer then
    * pays from the Dealkr wallet via `/requirements/:id/pay`. Nothing is broadcast to other vendors.
    */
-  async wholesaleBuy(listingId, quantity, actor) {
+  async wholesaleBuy(listingId, quantity, actor, unitNos = null) {
     const qty = Number(quantity)
     if (!Number.isInteger(qty) || qty < 1) throw err(400, 'Enter a whole number of units', 'VALIDATION_ERROR')
     const buyer = (await query(`SELECT status FROM vendors WHERE id=$1`, [actor.vendorId])).rows[0]
@@ -424,6 +428,16 @@ export const b2b = {
     const l = await this.wholesaleDetail(actor.vendorId, listingId)
     if (qty < l.moq) throw err(400, `Minimum order is ${l.moq} units`, 'BELOW_MOQ')
     if (qty > l.stock) throw err(409, `Only ${l.stock} units are in stock`, 'OUT_OF_STOCK')
+    // Used / refurbished / open-box stock is bought device by device: reserve the chosen (or first available) devices first.
+    let devices = null
+    if (l.condition && l.condition !== 'NEW') {
+      const rc = await getClient()
+      try {
+        await rc.query('BEGIN')
+        devices = await reserveUnits(rc, listingId, qty, unitNos)
+        await rc.query('COMMIT')
+      } catch (x) { await rc.query('ROLLBACK').catch(() => {}); throw x } finally { rc.release() }
+    }
     const client = await getClient()
     let reqId; let quoteId
     try {
@@ -444,10 +458,23 @@ export const b2b = {
       quoteId = q.rows[0].id
       await event(client, reqId, null, 'POSTED', actor, `Wholesale shelf: ${qty} × ${name}`)
       await client.query('COMMIT')
-    } catch (x) { await client.query('ROLLBACK').catch(() => {}); throw x } finally { client.release() }
-    const orders = await this.award(reqId, [{ quoteId, quantity: qty }], actor)
+    } catch (x) {
+      await client.query('ROLLBACK').catch(() => {})
+      if (devices) await releaseNos(listingId, devices).catch(() => {})
+      throw x
+    } finally { client.release() }
+    let orders
+    try { orders = await this.award(reqId, [{ quoteId, quantity: qty }], actor) } catch (x) {
+      if (devices) await releaseNos(listingId, devices).catch(() => {})
+      throw x
+    }
     const o = orders[0]
-    return { requirement_id: reqId, order_id: o.id, order_number: o.order_number, quantity: qty, unit_price: l.wholesale_price, total: Number(o.subtotal), seller: l.seller.name }
+    if (devices) {
+      const ac = await getClient()
+      try { await attachOrder(ac, listingId, devices, o.id) } finally { ac.release() }
+    }
+    return {
+      devices, requirement_id: reqId, order_id: o.id, order_number: o.order_number, quantity: qty, unit_price: l.wholesale_price, total: Number(o.subtotal), seller: l.seller.name }
   },
 
   // ── Razorpay Checkout for wholesale purchases ───────────────────────────
@@ -787,6 +814,7 @@ export const b2b = {
       if (['COMPLETED', 'CANCELLED'].includes(r.status)) throw err(409, `Requirement is already ${r.status.toLowerCase()}`)
       const paid = await client.query(`SELECT 1 FROM b2b_orders WHERE requirement_id=$1 AND status NOT IN ('PENDING_PAYMENT','CANCELLED') LIMIT 1`, [id])
       if (paid.rows[0]) throw err(409, 'Some orders are already paid — resolve them before cancelling', 'HAS_PAID_ORDERS')
+      for (const po of (await client.query(`SELECT id FROM b2b_orders WHERE requirement_id=$1 AND status='PENDING_PAYMENT'`, [id])).rows) await releaseForOrder(client, po.id)
       await client.query(`UPDATE b2b_orders SET status='CANCELLED', updated_at=NOW() WHERE requirement_id=$1 AND status='PENDING_PAYMENT'`, [id])
       await client.query(`UPDATE b2b_quotes SET status='NOT_SELECTED', updated_at=NOW() WHERE requirement_id=$1 AND status IN ('SUBMITTED','SELECTED','PARTIALLY_SELECTED')`, [id])
       await client.query(`UPDATE b2b_requirements SET status='CANCELLED', cancel_reason=$2, updated_at=NOW() WHERE id=$1`, [id, reason || null])
@@ -947,6 +975,7 @@ export const b2b = {
       const sets = { PACKED: `packed_at=NOW()`, DISPATCHED: pickup ? `dispatched_at=NOW(), fulfilment_type='PICKUP', pickup_at=$3, pickup_note=$4` : `dispatched_at=NOW(), fulfilment_type='DELIVERY', courier_name=$3, awb=$4, tracking_url=$5`, DELIVERED: `delivered_at=NOW()` }[status]
       const args = status !== 'DISPATCHED' ? [orderId, status] : pickup ? [orderId, status, pickupAt, pickupNote || null] : [orderId, status, courierName, awb, trackingUrl || null]
       await client.query(`UPDATE b2b_orders SET status=$2, ${sets}, updated_at=NOW() WHERE id=$1`, args)
+      await setOrderUnits(client, orderId, status)
       const note = status === 'DISPATCHED' ? (pickup ? `Pickup scheduled for ${new Date(pickupAt).toISOString()}` : `${courierName} · AWB ${awb}`) : null
       await event(client, o.requirement_id, o.id, status, actor, note)
       if (o.buyer_vendor_id) {
@@ -972,6 +1001,7 @@ export const b2b = {
       const r = (await client.query(`SELECT * FROM b2b_requirements WHERE id=$1 FOR UPDATE`, [o.requirement_id])).rows[0]
       const refunded = await refundBuyer(client, o, o.quantity, 'cancel')
       await client.query(`UPDATE b2b_orders SET status='CANCELLED', payment_status='REFUNDED', cancel_reason=$2, released_amount=0, updated_at=NOW() WHERE id=$1`, [orderId, reason.trim()])
+      await releaseForOrder(client, orderId)
       // The seller failed to deliver: the offer is withdrawn unless another order on the same offer is still alive.
       await client.query(
         `UPDATE b2b_quotes SET quantity_awarded = GREATEST(0, quantity_awarded - $2),
@@ -1088,7 +1118,9 @@ export const b2b = {
         WHERE requirement_id=$1 AND (order_id=$2 OR (order_id IS NULL AND type IN ('POSTED','PAID'))) ORDER BY created_at`, [o.requirement_id, orderId])).rows
     const payment = o.payment_id ? (await query(`SELECT amount, method, reference, status, paid_at FROM b2b_payments WHERE id=$1`, [o.payment_id])).rows[0] : null
     const n = (x) => (x == null ? x : Number(x))
+    const devices = await orderUnits(orderId)
     return {
+      devices,
       order: { ...stripInvoicePath(o), unit_price: n(o.unit_price), subtotal: n(o.subtotal), commission_percent: n(o.commission_percent), commission_amount: n(o.commission_amount), seller_payable: n(o.seller_payable), released_amount: n(o.released_amount) },
       requirement: num(r),
       seller: { name: seller?.name, ...(paid && !isSeller ? { phone: seller?.phone, city: seller?.city, pincode: seller?.pincode, address: seller?.address } : { city: seller?.city }) },

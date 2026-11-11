@@ -222,8 +222,8 @@ export async function createModel(input) {
   const m = await parseModelInput(input)
   try {
     const { rows } = await query(
-      `INSERT INTO sell_device_models (name, category, variants, colors, base_price, brand, brand_logo_url, image_url, series, sale_enabled, repair_enabled, display_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      `INSERT INTO sell_device_models (name, category, variants, colors, base_price, brand, brand_logo_url, image_url, series, sale_enabled, repair_enabled, display_order, price_source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, CASE WHEN $5::numeric IS NULL THEN NULL ELSE 'admin' END) RETURNING *`,
       [m.name, m.category, JSON.stringify(m.variants), JSON.stringify(m.colors), m.basePrice, m.brand, m.brandLogoUrl, m.imageUrl, m.series, m.saleEnabled, m.repairEnabled, m.displayOrder]
     )
     return serializeModel(rows[0])
@@ -239,7 +239,7 @@ export async function updateModel(id, input) {
   const m = await parseModelInput(input, cur[0])
   try {
     const { rows } = await query(
-      `UPDATE sell_device_models SET name=$2, category=$3, variants=$4, colors=$5, base_price=$6,
+      `UPDATE sell_device_models SET name=$2, category=$3, variants=$4, colors=$5, base_price=$6, price_source = CASE WHEN base_price IS DISTINCT FROM $6::numeric THEN 'admin' ELSE price_source END,
               brand=$8, brand_logo_url=$9, image_url=$10, series=$11, sale_enabled=$12, repair_enabled=$13, display_order=$14,
               is_active = COALESCE($7, is_active), updated_at = NOW() WHERE id = $1 RETURNING *`,
       [id, m.name, m.category, JSON.stringify(m.variants), JSON.stringify(m.colors), m.basePrice, typeof input.isActive === 'boolean' ? input.isActive : null, m.brand, m.brandLogoUrl, m.imageUrl, m.series, m.saleEnabled, m.repairEnabled, m.displayOrder]

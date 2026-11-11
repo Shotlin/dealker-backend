@@ -1,3 +1,4 @@
+import { firstUnitAsQc } from '../listing-units/units.service.js'
 import { query } from '../../config/database.js'
 import { QcService } from '../qc/qc.service.js'
 
@@ -83,7 +84,8 @@ export async function getCondition(productId) {
   const accessories = r.accessories_included
     ? String(r.accessories_included).split(/[,;\n]| and /i).map((s) => s.trim()).filter(Boolean)
     : []
-  const qc = isUsed ? await new QcService().publicReport(productId) : null
+  // A listing with per-device QC shows the FIRST device still for sale; older listings keep the listing-level QC.
+  const qc = isUsed ? ((await firstUnitAsQc(productId)) || (await new QcService().publicReport(productId))) : null
   return {
     shopId: r.shop_id || null,
     condition,

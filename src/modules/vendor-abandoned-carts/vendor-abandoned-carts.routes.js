@@ -6,6 +6,7 @@
 
 import { isPlatformUser, requireVendorScope } from '../../middlewares/vendor-scope.js'
 import * as svc from './vendor-abandoned-carts.service.js'
+import * as coupons from './vendor-abandoned-carts.coupons.js'
 
 const idParams = { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] }
 
@@ -53,4 +54,30 @@ export default async function vendorAbandonedCartsRoutes(fastify) {
       },
     },
   }, wrap(async (r) => ok(await svc.remind(r.vendorId, r.params.id, r.body, { userId: r.user.id, fastify }))))
+  fastify.post('/:id/coupons', {
+    preHandler: pre,
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    schema: {
+      params: idParams,
+      body: {
+        type: 'object', required: ['productId', 'discountType', 'value'],
+        properties: {
+          productId: { type: 'string', format: 'uuid' },
+          discountType: { type: 'string', enum: ['FLAT', 'PERCENTAGE'] },
+          value: { type: 'number', minimum: 1, maximum: 1000000 },
+          validDays: { type: 'integer', enum: [1, 3, 7] },
+        },
+      },
+    },
+  }, wrap(async (r) => {
+    await coupons.sendCoupon(r.vendorId, r.params.id, r.body, { userId: r.user.id, fastify })
+    return ok(await svc.detail(r.vendorId, r.params.id))
+  }))
+  fastify.delete('/:id/coupons/:couponId', {
+    preHandler: pre,
+    schema: { params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, couponId: { type: 'string', format: 'uuid' } }, required: ['id', 'couponId'] } },
+  }, wrap(async (r) => {
+    await coupons.cancelCoupon(r.vendorId, r.params.id, r.params.couponId)
+    return ok(await svc.detail(r.vendorId, r.params.id))
+  }))
 }

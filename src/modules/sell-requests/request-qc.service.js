@@ -17,6 +17,7 @@
 import { query } from '../../config/database.js'
 import { SellError, addEvent, cancel, lock, tx } from './sell-requests.service.js'
 import { notifySellEvent } from './sell-requests.notify.js'
+import { DEFAULT_RULES, valuate, qaFromInspection } from './valuation.js'
 
 export const QC_TRANSITIONS = Object.freeze({
   AWAITING_EVIDENCE: ['EVIDENCE_UPLOADED'],
@@ -62,6 +63,32 @@ function serializeQc(q, history = []) {
   }
 }
 
+/**
+ * Auto-decrease: re-price the phone from what the inspector actually found (same deduction matrix as the customer's quote).
+ * The ratio (inspected value / declared value, never above 1) is applied to the price the customer is getting
+ * (the accepted offer, else the quote), so a phone that is worse than described loses value automatically.
+ */
+async function autoValuation(requestId, qcRow) {
+  if (!qcRow?.inspected_at) return null
+  const { rows } = await query(`SELECT base_price, qa, quote, final_price, accepted_offer_id FROM sell_requests WHERE id = $1`, [requestId])
+  const r = rows[0]
+  if (!r || !r.qa || r.base_price == null) return null
+  const { rows: st } = await query(`SELECT rules, max_total_deduction_pct FROM sell_settings WHERE id = TRUE`)
+  const rules = { ...DEFAULT_RULES, ...(st[0]?.rules || {}) }
+  const max = Number(st[0]?.max_total_deduction_pct ?? 85)
+  const declared = valuate(Number(r.base_price), r.qa, rules, max)
+  const found = valuate(Number(r.base_price), qaFromInspection(r.qa, {
+    screenCondition: qcRow.screen_condition, physicalCondition: qcRow.physical_condition, batteryHealth: qcRow.battery_health, functionality: qcRow.functionality,
+  }), rules, max)
+  const agreed = r.accepted_offer_id && r.final_price != null ? Number(r.final_price) : null
+  const ceiling = agreed ?? Number(r.quote)
+  const ratio = declared.value > 0 ? Math.min(1, found.value / declared.value) : 1
+  return {
+    value: Math.round(ceiling * ratio * 100) / 100, ceiling, ratio: Math.round(ratio * 1000) / 1000,
+    declaredPct: declared.totalPct, foundPct: found.totalPct, deductions: found.deductions,
+  }
+}
+
 const QC_SELECT = `SELECT q.*, u.name AS inspector_name FROM sell_request_qc q LEFT JOIN users u ON u.id = q.inspector_id`
 
 export async function getQc(requestId, { forCustomer = false } = {}) {
@@ -70,12 +97,14 @@ export async function getQc(requestId, { forCustomer = false } = {}) {
     `SELECT h.*, u.name AS actor_name FROM sell_request_qc_events h LEFT JOIN users u ON u.id = h.actor_id WHERE h.request_id = $1 ORDER BY h.id`, [requestId]
   )
   const out = serializeQc(rows[0], hist)
+  const auto = await autoValuation(requestId, rows[0]).catch(() => null)
+  if (auto && ['INSPECTION_COMPLETE', 'PASSED', 'RECHECK', 'FAILED'].includes(out.status)) out.autoValuation = auto
   if (forCustomer) {
     // Customers see the outcome and valuation, not the inspector's internal notes or identity.
     return {
       status: out.status, finalValuation: out.finalValuation, customerDecision: out.customerDecision,
       physicalCondition: out.physicalCondition, screenCondition: out.screenCondition, batteryHealth: out.batteryHealth,
-      imeiVerified: out.imeiVerified, remarks: out.status === 'PASSED' || out.status === 'FAILED' || out.status === 'RECHECK' ? out.remarks : undefined,
+      imeiVerified: out.imeiVerified, autoDeductions: auto && out.status === 'PASSED' ? auto.deductions : undefined, remarks: out.status === 'PASSED' || out.status === 'FAILED' || out.status === 'RECHECK' ? out.remarks : undefined,
     }
   }
   return out
@@ -188,7 +217,8 @@ export const decide = (actor, id, { result, note, finalValuation } = {}) => {
     if (result === 'PASSED') {
       if (q.imei_verified === false) throw new SellError('IMEI_MISMATCH', 'A device whose IMEI could not be verified cannot pass QC', 409)
       const agreed = r.accepted_offer_id && r.final_price != null ? Number(r.final_price) : null
-      valuation = finalValuation == null || finalValuation === '' ? Number(agreed ?? r.quote) : Number(finalValuation)
+      const auto = finalValuation == null || finalValuation === '' ? await autoValuation(id, q).catch(() => null) : null
+      valuation = finalValuation == null || finalValuation === '' ? Number(auto?.value ?? agreed ?? r.quote) : Number(finalValuation)
       if (!Number.isFinite(valuation) || valuation < 0 || valuation > 10_000_000) throw new SellError('VALIDATION', 'Final valuation is invalid', 422)
       if (agreed != null && valuation > agreed) throw new SellError('VALIDATION', `The final price cannot be higher than the accepted offer (₹${agreed})`, 422)
       valuation = Math.round(valuation * 100) / 100
@@ -198,7 +228,7 @@ export const decide = (actor, id, { result, note, finalValuation } = {}) => {
               customer_decision=$5, decided_by=$6, decided_at=NOW(), updated_at=NOW() WHERE request_id=$1`,
       [id, result, valuation, n, result === 'PASSED' ? 'PENDING' : 'NONE', actor.userId]
     )
-    await history(client, id, q.status, result, `QC_${result}`, actor, n || null, valuation != null ? { finalValuation: valuation } : {})
+    await history(client, id, q.status, result, `QC_${result}`, actor, n || null, valuation != null ? { finalValuation: valuation, auto: finalValuation == null || finalValuation === '' } : {})
     await addEvent(client, id, 'QC_RESULT', `QC ${result === 'PASSED' ? 'passed' : result === 'RECHECK' ? 'needs a recheck' : 'failed'}`, actor, { finalValuation: valuation })
     return { valuation, note: n }
   }).then(({ valuation, note: n }) => {

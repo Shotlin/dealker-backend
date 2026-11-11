@@ -1,3 +1,4 @@
+import { createUnits, ensureUnits } from '../listing-units/units.service.js'
 import { query, getClient } from '../../config/database.js'
 import { QcService } from '../qc/qc.service.js'
 import { SubscriptionsService } from '../subscriptions/subscriptions.service.js'
@@ -159,8 +160,11 @@ export const listingsService = {
     if (input.mrp !== undefined && input.mrp !== null && input.price != null && Number(input.mrp) < Number(input.price)) e.push('MRP cannot be lower than the selling price')
     const cond = input.condition
     if (cond && USED.includes(cond) && !partial && !String(input.conditionNotes || '').trim()) e.push('Describe the condition (scratches, usage) for used items')
-    // Used phones sold to customers are unique single units; a B2B-only lot may hold several graded units.
-    if (cond && USED.includes(cond) && b2c && Number(input.stock) > 1) e.push('Used items are single-unit listings (quantity 1)')
+    // Every unit of a used / refurbished / open-box listing carries its own QC report (Device 1 … Device N).
+    if (cond && cond !== 'NEW' && !partial) {
+      const q = input.unitQc
+      if (!Array.isArray(q) || q.length !== Number(input.stock)) e.push(`Complete the QC for every device — ${input.stock} unit${Number(input.stock) === 1 ? '' : 's'} need a QC report each`)
+    }
     if (!partial) this.checkChannels(input, e)
     else if (input.sellB2c === false && input.sellB2b === false) e.push('Choose at least one sales channel (B2B or B2C)')
     if (e.length) throw err(400, e.join('. '), 'VALIDATION_ERROR')
@@ -173,7 +177,7 @@ export const listingsService = {
     // A B2B-only listing is stored with its wholesale price as the base price.
     const price = b2c ? Number(input.price) : Number(input.wholesalePrice)
     const mrp = input.mrp ?? price
-    const singleUnit = USED.includes(input.condition) && b2c
+    const singleUnit = false
     const client = await getClient()
     try {
       await client.query('BEGIN')
@@ -229,6 +233,7 @@ export const listingsService = {
           Number(input.stock) > 0 ? 'ACTIVE' : 'OUT_OF_STOCK',
           b2b ? Number(input.moq ?? 1) : 1, b2c, b2b, b2b ? Number(input.wholesalePrice) : null, b2b ? (input.b2bDiscountPct ?? null) : null,
           b2b ? (input.b2bNotes || null) : null, input.vendorQc ? JSON.stringify(input.vendorQc) : null])).rows[0].id
+      if (input.condition !== 'NEW') await createUnits(client, spId, input.unitQc, { imeis: input.unitImeis || [], actorId: scope.actorId })
       await client.query('COMMIT')
       await qc.autoIfEnabled(spId)
       return this.detail(spId, { vendorId: null })
@@ -252,7 +257,6 @@ export const listingsService = {
     }
     const problems = []
     this.checkChannels(merged, problems)
-    if (USED.includes(cond) && merged.sellB2c && Number(merged.stock) > 1) problems.push('Used items are single-unit listings (quantity 1)')
     if (merged.mrp != null && Number(merged.price) > Number(merged.mrp)) problems.push('MRP cannot be lower than the selling price')
     if (problems.length) throw err(400, problems.join('. '), 'VALIDATION_ERROR')
     const client = await getClient()
@@ -301,6 +305,8 @@ export const listingsService = {
       if (scope.vendorId && contentChanged) ss.push("approval_status = 'PENDING'", 'rejection_reason = NULL')
       if (ss.length) await client.query(`UPDATE shop_products SET ${ss.join(', ')}, updated_at = NOW() WHERE id = $1`, sv)
       await client.query('COMMIT')
+      // more units in stock than QC'd devices → add default QC for the new ones (flagged for the vendor to review)
+      if (cond !== 'NEW' && input.stock !== undefined) await ensureUnits(id).catch(() => {})
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {})
       throw e

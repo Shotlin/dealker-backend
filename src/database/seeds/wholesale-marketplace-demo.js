@@ -103,7 +103,8 @@ async function ensureVendor(v, i) {
   const { rows: ex } = await query('SELECT id FROM vendors WHERE slug = $1', [slug])
   if (DRY) return ex[0]?.id || `(new vendor ${v.name})`
   const { rows: u0 } = await query('SELECT id, name FROM users WHERE phone = $1', [v.phone])
-  if (u0[0] && !ex[0]) throw new Error(`Phone ${v.phone} already belongs to another user — aborting`)
+  // A leftover user with this demo phone (e.g. after a partial --clear) is reused; refuse only when it is clearly somebody else's account.
+  if (u0[0] && !ex[0] && u0[0].name !== v.owner) throw new Error(`Phone ${v.phone} already belongs to another user — aborting`)
   const userId = u0[0]?.id || (await query(`INSERT INTO users (phone, name, role) VALUES ($1,$2,'CUSTOMER') RETURNING id`, [v.phone, v.owner])).rows[0].id
   const vendorId = ex[0]?.id || (await query(
     `INSERT INTO vendors (name, slug, email, phone, status, is_active) VALUES ($1,$2,$3,$4,'ACTIVE',TRUE) RETURNING id`,

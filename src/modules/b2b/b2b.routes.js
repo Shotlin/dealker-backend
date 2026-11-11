@@ -1,3 +1,4 @@
+import { markPacked } from '../listing-units/units.service.js'
 import { b2b } from './b2b.service.js'
 import { requireVendorScope } from '../../middlewares/vendor-scope.js'
 import { readInvoiceUpload, attachOrderInvoice, sendOrderInvoice } from '../invoices/order-invoice.js'
@@ -49,8 +50,8 @@ export async function vendorB2bRoutes(fastify) {
     wrap(async (req) => ({ success: true, data: await b2b.wholesaleDetail(req.vendorId, req.params.id) })))
   fastify.post('/wholesale/:id/order', {
     preHandler: pre,
-    schema: { params: { type: 'object', properties: { id: uuid }, required: ['id'] }, body: { type: 'object', required: ['quantity'], properties: { quantity: { type: 'integer', minimum: 1, maximum: 100000 } }, additionalProperties: false } },
-  }, wrap(async (req, reply) => reply.code(201).send({ success: true, data: await b2b.wholesaleBuy(req.params.id, req.body.quantity, actor(req)) })))
+    schema: { params: { type: 'object', properties: { id: uuid }, required: ['id'] }, body: { type: 'object', required: ['quantity'], properties: { quantity: { type: 'integer', minimum: 1, maximum: 100000 }, unitNos: { type: 'array', maxItems: 500, items: { type: 'integer', minimum: 1 } } }, additionalProperties: false } },
+  }, wrap(async (req, reply) => reply.code(201).send({ success: true, data: await b2b.wholesaleBuy(req.params.id, req.body.quantity, actor(req), req.body.unitNos) })))
   // Razorpay Checkout for one or many wholesale orders (the cart pays once)
   fastify.post('/pay/razorpay/order', {
     preHandler: pre,
@@ -90,6 +91,11 @@ export async function vendorB2bRoutes(fastify) {
     schema: { body: { type: 'object', required: ['status'], properties: { status: { enum: ['PACKED', 'DISPATCHED', 'DELIVERED'] }, courierName: { type: 'string' }, awb: { type: 'string' }, trackingUrl: { type: 'string' },
       fulfilmentType: { enum: ['DELIVERY', 'PICKUP'] }, pickupAt: { type: 'string' }, pickupNote: { type: 'string', maxLength: 500 } } } },
   }, wrap(async (req) => { await b2b.sellerUpdate(req.params.id, req.vendorId, req.body, actor(req)); return { success: true } }))
+  // The seller ticks a device of a paid order as packed (it is then locked for everybody else, shown blurred).
+  fastify.post('/orders/:id/devices/:unitNo/pack', {
+    preHandler: pre,
+    schema: { body: { type: 'object', properties: { packed: { type: 'boolean' } }, additionalProperties: false } },
+  }, wrap(async (req) => ({ success: true, data: await markPacked(req.params.id, req.vendorId, req.params.unitNo, req.body?.packed !== false) })))
   fastify.get('/orders/:id', { preHandler: pre }, wrap(async (req) => ({ success: true, data: await b2b.orderDetail(req.params.id, { vendorId: req.vendorId }) })))
   // The seller's own invoice for the order — required before packing / dispatching.
   fastify.post('/orders/:id/invoice', { preHandler: pre }, wrap(async (req) =>

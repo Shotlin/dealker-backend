@@ -1,5 +1,6 @@
 import { listingsService as svc } from './listings.service.js'
 import { requireVendorScope } from '../../middlewares/vendor-scope.js'
+import * as units from '../listing-units/units.service.js'
 
 const wrap = (fn) => async (req, reply) => {
   try { return await fn(req, reply) } catch (e) {
@@ -27,6 +28,7 @@ const bodySchema = {
     b2bDiscountPct: { type: ['number', 'null'], minimum: 0, maximum: 50 }, b2bNotes: { type: ['string', 'null'], maxLength: 500 },
     videoUrl: { type: ['string', 'null'], maxLength: 2048 }, vendorQc: { type: ['object', 'null'] },
     highlights: { type: ['array', 'null'], items: { type: 'string', maxLength: 120 }, maxItems: 6 },
+    unitQc: { type: 'array', maxItems: 500, items: { type: 'object' } }, unitImeis: { type: 'array', maxItems: 500, items: { type: ['string', 'null'] } },
   },
   additionalProperties: false,
 }
@@ -64,6 +66,22 @@ export async function vendorListingRoutes(fastify) {
     reply.code(201).send({ success: true, data: await svc.create(req.body, scope(req)) })))
   fastify.patch('/:id', { preHandler: pre, schema: { body: bodySchema } }, wrap(async (req) =>
     ({ success: true, data: await svc.update(req.params.id, req.body, scope(req)) })))
+  // Per-device QC (Device 1 … N) of one of the vendor's own used / refurbished / open-box listings.
+  fastify.get('/:id/units', { preHandler: pre }, wrap(async (req) => {
+    await svc.detail(req.params.id, scope(req))
+    return { success: true, data: await units.vendorUnits(req.params.id) }
+  }))
+  fastify.get('/:id/units/:unitNo', { preHandler: pre }, wrap(async (req) => {
+    await svc.detail(req.params.id, scope(req))
+    const all = await units.unitsOf(req.params.id)
+    const u = all.find((x) => x.unit_no === Number(req.params.unitNo))
+    if (!u) return { success: false, message: 'Device not found', code: 'NOT_FOUND' }
+    return { success: true, data: { unit_no: u.unit_no, imei: u.imei, qc: u.qc, score: u.qc_score, sold: u.sold } }
+  }))
+  fastify.put('/:id/units/:unitNo', { preHandler: pre, schema: { body: { type: 'object', required: ['qc'], properties: { qc: { type: 'object' } } } } }, wrap(async (req) => {
+    await svc.detail(req.params.id, scope(req))
+    return { success: true, data: await units.updateUnit(req.params.id, Number(req.params.unitNo), req.body.qc, scope(req).actorId) }
+  }))
   fastify.patch('/:id/status', { preHandler: pre, schema: { body: { type: 'object', required: ['listingStatus'], properties: { listingStatus: { enum: ['ACTIVE', 'PAUSED'] } } } } },
     wrap(async (req) => ({ success: true, data: await svc.setStatus(req.params.id, req.body.listingStatus, scope(req)) })))
   fastify.delete('/:id', { preHandler: pre }, wrap(async (req) => { await svc.remove(req.params.id, scope(req)); return { success: true } }))
