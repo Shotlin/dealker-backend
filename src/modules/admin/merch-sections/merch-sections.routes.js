@@ -3,7 +3,8 @@
  * app will really show. Reads through the same resolver the public manifest uses
  * (resolveManifestSection); edits go through the existing /admin/sections APIs.
  */
-import { resolveManifestSection } from '../../themes/public.controller.js'
+import { resolveManifestSection, loadAdCards } from '../../themes/public.controller.js'
+import { injectHomeAds } from '../../ads/ads-home.service.js'
 import { getProductsByRules, normalizeRules } from '../../themes/merch-rules.js'
 import { SectionsRepository } from '../sections/sections.repository.js'
 import { DealEntriesService } from '../../promo-campaigns/deal-entries.service.js'
@@ -59,6 +60,41 @@ export default async function adminMerchSectionRoutes(fastify) {
       return { ...section, ...summarise(section) }
     }))
     return success({ sections, hidden_names: names }, 'Merchandising sections')
+  })
+
+  /**
+   * Theme-builder live preview: resolves the builder's (possibly unsaved) sections through the
+   * SAME resolver + sponsored-ad placement the customer app uses, so the builder shows the real
+   * products — category/rule/deal/auto-fill — with approved campaign ads first (flagged, no
+   * impression recorded).  Returns { [sectionId]: products[] }.
+   */
+  fastify.post('/preview', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['sections'],
+        properties: {
+          sections: {
+            type: 'array', maxItems: 80,
+            items: {
+              type: 'object', required: ['id', 'section_type'],
+              properties: { id: { type: 'string' }, section_type: { type: 'string' }, config: { type: 'object' }, merch_binding: { type: ['object', 'null'] } },
+            },
+          },
+        },
+      },
+    },
+  }, async (request) => {
+    const resolved = await Promise.all(request.body.sections.map(async (s) => {
+      const row = { id: s.id, type: s.section_type, config: s.config || {}, merch_binding: s.merch_binding || null }
+      try { return await resolveManifestSection(row, null, 'retail') } catch { return row }
+    }))
+    const withAds = await injectHomeAds({ sections: resolved }, {
+      preview: true,
+      loadCards: (items) => loadAdCards(items, 'retail'),
+    })
+    const products = Object.fromEntries(withAds.data.sections.map((s) => [s.id, Array.isArray(s.products) ? s.products : []]))
+    return success({ products, ads_placed: withAds.injected }, 'Preview products')
   })
 
   // Deals (promo campaigns) and where each is shown. Create/edit them on the Campaigns page.

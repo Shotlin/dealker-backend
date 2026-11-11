@@ -2,6 +2,7 @@ import { createHash } from 'crypto'
 import { withCardFields } from '../../utils/product-card-fields.js'
 import { getProductsByRules, normalizeRules } from './merch-rules.js'
 import { getCampaignDeal, isCampaignId } from './merch-deals.js'
+import { injectHomeAds, manifestEtag } from '../ads/ads-home.service.js'
 import { query } from '../../config/database.js'
 import { redis } from '../../config/redis.js'
 import { success, error } from '../../utils/apiResponse.js'
@@ -12,6 +13,7 @@ import {
   etagMatches,
   memoizeByEtag,
   quoteEtag,
+  slimCardProduct,
   slimManifestProducts,
 } from './manifest-payload.js'
 import {
@@ -429,8 +431,17 @@ export class PublicThemeController {
       return error('Tab not found', 'NOT_FOUND')
     }
 
-    // The compact body is derived from the same cached manifest, so it gets its own etag.
-    const etag = compact ? `${entry._etag}-c` : entry._etag
+    // Approved sponsored campaigns go FIRST in every relevant product section. This runs per
+    // request (not inside the shared cache) because each ad carries a signed, per-shopper
+    // impression token and the live wallet / budget state decides who is eligible.
+    const ads = await injectHomeAds(entry.data, {
+      userId: request.user?.id || null,
+      loadCards: (items) => loadAdCards(items, priceMode),
+    })
+    const baseEtag = ads.injected > 0 ? manifestEtag(ads.data) : entry._etag
+
+    // The compact body is derived from the same manifest, so it gets its own etag.
+    const etag = compact ? `${baseEtag}-c` : baseEtag
     reply.header('ETag', quoteEtag(etag))
     if (etagMatches(request.headers['if-none-match'], etag)) {
       reply.code(304)
@@ -438,7 +449,9 @@ export class PublicThemeController {
     }
 
     reply.header('Cache-Control', 'private, max-age=60')
-    const data = compact ? memoizeByEtag(etag, () => compactManifest(entry.data)) : entry.data
+    const data = ads.injected > 0
+      ? (compact ? compactManifest(ads.data) : ads.data)
+      : (compact ? memoizeByEtag(etag, () => compactManifest(entry.data)) : entry.data)
     return success(data, 'Section manifest')
   }
 
@@ -971,7 +984,22 @@ async function resolveStealDealsConfig(config, allocatedShopIds, priceMode) {
   return { ...cfg, tabs }
 }
 
-async function getProductsByIds(productIds, allocatedShopIds = null, priceMode = 'retail') {
+/**
+ * Cards for sponsored products. Unlike organic sections these are NOT limited to the shopper's
+ * storefront shop — an ad is a marketplace listing — so each card is read through its advertiser's
+ * own shop (that shop's price / stock), one shop at a time so two sellers of one product never mix.
+ */
+export async function loadAdCards(items, priceMode = 'retail') {
+  const byShop = new Map()
+  for (const { productId, shopId } of items) {
+    if (!byShop.has(shopId)) byShop.set(shopId, [])
+    byShop.get(shopId).push(productId)
+  }
+  const groups = await Promise.all([...byShop].map(([shopId, ids]) => getProductsByIds(ids, [shopId], priceMode)))
+  return groups.flat().map(slimCardProduct)
+}
+
+export async function getProductsByIds(productIds, allocatedShopIds = null, priceMode = 'retail') {
   if (!Array.isArray(productIds) || productIds.length === 0) {
     return []
   }

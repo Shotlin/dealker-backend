@@ -158,7 +158,7 @@ export async function serve({ q = '', categoryId = null, pincode = '', userId = 
   })
 }
 
-async function recordImpressions(winners) {
+export async function recordImpressions(winners) {
   await query(
     `INSERT INTO ad_stats_daily (campaign_id, product_id, day, impressions)
      SELECT c, p, ${IST_DAY_SQL}, 1 FROM unnest($1::uuid[], $2::uuid[]) AS t(c, p)
