@@ -996,7 +996,31 @@ export async function loadAdCards(items, priceMode = 'retail') {
     byShop.get(shopId).push(productId)
   }
   const groups = await Promise.all([...byShop].map(([shopId, ids]) => getProductsByIds(ids, [shopId], priceMode)))
-  return groups.flat().map(slimCardProduct)
+  const cards = groups.flat()
+
+  // The customer-visibility rule also demands nationwide shipping. A listing that is live and sold
+  // to consumers but ships locally only is still a valid ad (the product page checks the shopper's
+  // pincode, exactly like search ads), so rebuild those cards from the master product + the
+  // advertiser's own listing price/stock instead of silently dropping the campaign.
+  const have = new Set(cards.map((c) => c.id))
+  const missing = items.filter((i) => !have.has(i.productId))
+  if (missing.length) {
+    const masters = await getProductsByIds(missing.map((m) => m.productId), null, priceMode)
+    const { rows } = await query(
+      `SELECT sp.product_id, sp.shop_id, sp.price, sp.sale_price, sp.stock_quantity
+         FROM shop_products sp
+         JOIN unnest($1::uuid[], $2::uuid[]) AS t(product_id, shop_id) ON t.product_id = sp.product_id AND t.shop_id = sp.shop_id
+        WHERE sp.deleted_at IS NULL AND sp.sell_b2c = TRUE`,
+      [missing.map((m) => m.productId), missing.map((m) => m.shopId)]
+    )
+    const byProduct = new Map(rows.map((r) => [r.product_id, r]))
+    for (const m of masters) {
+      const l = byProduct.get(m.id)
+      if (!l) continue
+      cards.push({ ...m, shop_id: l.shop_id, price: l.price, sale_price: l.sale_price, stock_quantity: l.stock_quantity })
+    }
+  }
+  return cards.map(slimCardProduct)
 }
 
 export async function getProductsByIds(productIds, allocatedShopIds = null, priceMode = 'retail') {

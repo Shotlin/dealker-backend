@@ -26,6 +26,7 @@ const COPY = {
   COMPLETED: (r) => ({ title: 'Repair completed', body: `${r.code} is complete.${r.warranty_until ? ` Warranty valid until ${r.warranty_until.toLocaleDateString('en-IN')}.` : ''}` }),
   FAILED: (r, x) => ({ title: 'We could not repair your device', body: `${r.code}: ${x.reason || 'the device could not be repaired'}. We'll arrange its return.` }),
   UPDATE: (r) => ({ title: 'Repair update', body: `${r.code}: your repair shop posted an update on your device.` }),
+  MESSAGE: (r, x) => ({ title: 'New message from your repair shop', body: x.preview || `${r.code}: your repair shop sent you a message.` }),
   CANCELLED: (r) => ({ title: 'Repair request cancelled', body: `${r.code} was cancelled.` }),
 }
 
@@ -38,7 +39,7 @@ export function notifyRepair(kind, requestId, extra = {}) {
       const { rows } = await query('SELECT * FROM repair_requests WHERE id = $1', [requestId])
       const r = rows[0]
       if (!r?.user_id || extra.skipCustomer) return
-      const data = { event: `repair:${kind.toLowerCase()}`, requestId: r.id, code: r.code, status: r.status, channel: r.channel }
+      const data = { event: `repair:${kind.toLowerCase()}`, requestId: r.id, code: r.code, status: r.status, channel: r.channel, deepLink: kind === 'MESSAGE' ? `/repair/${r.id}/chat` : `/repair/${r.id}` }
       const msg = copy(r, extra)
       const n = await notifications()
       await n.sendNotification(r.user_id, { ...msg, type: 'REPAIR', data, app: 'customer' })

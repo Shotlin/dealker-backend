@@ -945,6 +945,7 @@ export async function sendMessage(actor, requestId, input = {}) {
   if (c[0].n >= 500) throw new RepairError('RATE_LIMITED', 'This chat is full', 429)
   const { rows } = await query(`INSERT INTO repair_messages (request_id, sender_role, sender_id, body) VALUES ($1,$2,$3,$4) RETURNING *`, [requestId, role, actor.userId, body])
   if (role === 'CUSTOMER' && request.serviceCenterId) pingVendors([request.serviceCenterId], { kind: 'chat', title: 'New repair message', body: body.slice(0, 80), data: { requestId }, push: true })
+  if (role === 'VENDOR') notifyRepair('MESSAGE', requestId, { preview: body.slice(0, 80) })
   return msgView(rows[0], role)
 }
 

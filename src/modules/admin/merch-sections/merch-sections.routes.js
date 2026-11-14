@@ -4,7 +4,7 @@
  * (resolveManifestSection); edits go through the existing /admin/sections APIs.
  */
 import { resolveManifestSection, loadAdCards } from '../../themes/public.controller.js'
-import { injectHomeAds } from '../../ads/ads-home.service.js'
+import { injectHomeAds, explainHomeAds } from '../../ads/ads-home.service.js'
 import { getProductsByRules, normalizeRules } from '../../themes/merch-rules.js'
 import { SectionsRepository } from '../sections/sections.repository.js'
 import { DealEntriesService } from '../../promo-campaigns/deal-entries.service.js'
@@ -61,6 +61,9 @@ export default async function adminMerchSectionRoutes(fastify) {
     }))
     return success({ sections, hidden_names: names }, 'Merchandising sections')
   })
+
+  // Why is a campaign not on the home screen? (every serving condition, per product)
+  fastify.get('/ads-diagnostics', async () => success(await explainHomeAds({ loadCards: (items) => loadAdCards(items, 'retail') }), 'Ad serving diagnostics'))
 
   /**
    * Theme-builder live preview: resolves the builder's (possibly unsaved) sections through the

@@ -110,12 +110,16 @@ function sectionContext(section, roots) {
   for (const p of section.products || []) if (p?.category_id) catIds.add(p.category_id)
   const roots_ = new Set([...catIds].map((id) => roots.get(id) || id))
   const brands = new Set((Array.isArray(rules.brands) ? rules.brands : []).map(lower).filter(Boolean))
-  return { roots: roots_, brands }
+  // Brands already on the shelf: an Apple ad belongs in a section that sells Apple products even when
+  // the vendor filed the listing under a different category (e.g. an iPhone under "Mobile Parts").
+  const shelfBrands = new Set((section.products || []).map((p) => lower(p?.brand)).filter(Boolean))
+  return { roots: roots_, brands, shelfBrands }
 }
 
 function fits(ad, ctx, roots) {
   if (ctx.brands.size) return ctx.brands.has(ad.brand)
   if (!ctx.roots.size) return true
+  if (ad.brand && ctx.shelfBrands.has(ad.brand)) return true
   return ctx.roots.has(roots.get(ad.categoryId) || ad.categoryId)
 }
 
@@ -198,3 +202,55 @@ export async function injectHomeAds(data, { loadCards, userId = null, preview = 
 }
 
 export const manifestEtag = (data) => createHash('md5').update(JSON.stringify(data)).digest('hex')
+
+/**
+ * "Why is this campaign not on the home screen?" — every serving condition, per campaign product.
+ * Admin diagnostics only; mirrors POOL_SQL / loadCandidates so the answer is the real one.
+ */
+export async function explainHomeAds({ loadCards } = {}) {
+  const s = await getSettings()
+  const minCpc = toPaise(s.min_cpc)
+  const minWallet = fromPaise(withGst(minCpc, s.gst_pct).grossPaise)
+  const { rows } = await query(
+    `SELECT c.campaign_number, c.name AS campaign, c.status, c.starts_on, c.ends_on, c.default_bid, c.daily_budget,
+            v.name AS vendor, COALESCE(w.balance, 0) AS wallet_balance, cp.status AS cp_status,
+            cp.product_id, (SELECT sp2.shop_id FROM shop_products sp2 JOIN shops s2 ON s2.id = sp2.shop_id
+                             WHERE sp2.product_id = cp.product_id AND s2.vendor_id = c.vendor_id AND sp2.deleted_at IS NULL LIMIT 1) AS shop_id,
+            p.name AS product, p.is_active AS product_active, p.deleted_at IS NOT NULL AS product_deleted,
+            COALESCE((SELECT SUM(spend) FROM ad_stats_daily WHERE campaign_id = c.id AND day = ${IST_DAY_SQL}), 0) AS spent_today,
+            (SELECT json_agg(json_build_object('shop', sx.name, 'shop_active', sx.is_active, 'shop_deleted', sx.deleted_at IS NOT NULL,
+                    'vendor_match', sx.vendor_id = c.vendor_id, 'listing_status', sp.listing_status, 'approval', sp.approval_status,
+                    'stock', sp.stock_quantity, 'available', sp.is_available, 'sell_b2c', sp.sell_b2c, 'nationwide', sp.nationwide_shipping_enabled))
+               FROM shop_products sp JOIN shops sx ON sx.id = sp.shop_id
+              WHERE sp.product_id = cp.product_id AND sp.deleted_at IS NULL) AS listings,
+            (c.starts_on <= ${IST_DAY_SQL} AND (c.ends_on IS NULL OR c.ends_on >= ${IST_DAY_SQL})) AS in_dates
+       FROM ad_campaigns c
+       JOIN vendors v ON v.id = c.vendor_id
+       LEFT JOIN ad_wallets w ON w.vendor_id = c.vendor_id
+       JOIN ad_campaign_products cp ON cp.campaign_id = c.id
+       JOIN products p ON p.id = cp.product_id
+      WHERE c.status = 'ACTIVE'`)
+  const cardOk = new Map()
+  if (loadCards) {
+    for (const r of rows) {
+      try { cardOk.set(r.product_id, (await loadCards([{ productId: r.product_id, shopId: r.shop_id }])).some((c) => c.id === r.product_id)) }
+      catch (err) { cardOk.set(r.product_id, `error: ${err.message}`) }
+    }
+  }
+  return {
+    settings: { enabled: s.enabled, min_cpc: Number(s.min_cpc), min_wallet_needed: minWallet, slots: s.slots_per_page, per_vendor: s.max_ads_per_vendor_per_page },
+    campaigns: rows.map((r) => {
+      const live = (r.listings || []).filter((l) => l.vendor_match && l.shop_active && !l.shop_deleted && l.listing_status === 'ACTIVE'
+        && l.approval === 'APPROVED' && l.stock > 0 && l.available)
+      const problems = []
+      if (!s.enabled) problems.push('Ads are switched off in settings')
+      if (!r.in_dates) problems.push('Outside campaign dates')
+      if (Number(r.wallet_balance) < minWallet) problems.push(`Ad wallet ${r.wallet_balance} < ${minWallet}`)
+      if (r.cp_status !== 'ACTIVE') problems.push(`Product row is ${r.cp_status}`)
+      if (!r.product_active || r.product_deleted) problems.push('Catalogue product inactive/deleted')
+      if (Number(r.daily_budget) - Number(r.spent_today) < Number(s.min_cpc)) problems.push('Daily budget used up')
+      if (!live.length) problems.push('No live listing owned by this vendor (see listings)')
+      return { campaign: `${r.campaign_number} ${r.campaign}`, vendor: r.vendor, product: r.product, serving: !problems.length, card_loads: cardOk.get(r.product_id) ?? null, problems, listings: r.listings }
+    }),
+  }
+}
