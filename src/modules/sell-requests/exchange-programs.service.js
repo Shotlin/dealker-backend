@@ -165,7 +165,7 @@ export async function forProduct(productId) {
   const { rows: stats } = await query(
     `SELECT category, COUNT(*)::int AS models, MAX(base_price) AS top,
             percentile_cont(0.5) WITHIN GROUP (ORDER BY base_price) AS mid, MIN(base_price) AS low
-       FROM sell_device_models WHERE is_active = TRUE AND category = ANY($1::text[]) GROUP BY category`, [keys])
+       FROM sell_device_models WHERE is_active = TRUE AND base_price IS NOT NULL AND category = ANY($1::text[]) GROUP BY category`, [keys])
   const by = Object.fromEntries(stats.map((r) => [r.category, r]))
   const out = types.filter((t) => by[t.key]).map((t) => {
     const r = by[t.key]
