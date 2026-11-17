@@ -1,4 +1,3 @@
-import { requireVendorScope } from '../../middlewares/vendor-scope.js'
 import { CategoriesController } from './categories.controller.js'
 import { CategoriesService } from './categories.service.js'
 import { CategoriesRepository } from './categories.repository.js'
@@ -8,7 +7,6 @@ import {
   getCategorySchema,
   getCategoryProductsSchema,
   createCategorySchema,
-  createVendorTypeSchema,
   updateCategorySchema,
   deleteCategorySchema,
   listBundlesSchema,
@@ -88,12 +86,6 @@ export default async function categoriesRoutes(fastify) {
     schema: createCategorySchema,
     preHandler: [fastify.authenticate, fastify.authorize(['ADMIN'])],
   }, controller.create.bind(controller))
-
-  // POST /vendor-type — A vendor adds a product type (top-level category) [VENDOR]
-  fastify.post('/vendor-type', {
-    schema: createVendorTypeSchema,
-    preHandler: [fastify.authenticate, requireVendorScope({ requireVendor: true })],
-  }, controller.createVendorType.bind(controller))
 
   // PUT /:id — Update category [ADMIN]
   fastify.put('/:id', {

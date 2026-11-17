@@ -241,14 +241,15 @@ export async function getPublic(userId, auctionId) {
 
 export async function listBids(userId, auctionId, { limit = 50 } = {}) {
   const { rows } = await query(
-    `SELECT b.seq, b.amount, b.bid_type, b.created_at, b.user_id, r.bidder_no
+    `SELECT b.seq, b.amount, b.bid_type, b.created_at, b.user_id, r.bidder_no, u.name AS bidder_name
        FROM auction_bids b LEFT JOIN auction_registrations r ON r.id = b.registration_id
+       LEFT JOIN users u ON u.id = b.user_id
       WHERE b.auction_id = $1 ORDER BY b.seq DESC LIMIT $2`,
     [auctionId, Math.min(200, limit)]
   )
   return rows.map((b) => ({
     seq: Number(b.seq), amount: Number(b.amount), type: b.bid_type, at: b.created_at,
-    alias: aliasOf(b.bidder_no), is_you: b.user_id === userId,
+    alias: aliasOf(b.bidder_no), username: (b.bidder_name || '').trim() || null, is_you: b.user_id === userId,
   }))
 }
 

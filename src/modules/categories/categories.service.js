@@ -176,29 +176,6 @@ export class CategoriesService {
   }
 
   /**
-   * Create a product type for a vendor (a top-level STANDARD category).
-   * Needs a name plus an emoji or an image so the type is recognisable in
-   * the pickers. Never creates subcategories or bundles.
-   */
-  async createVendorType({ name, emoji, image_url }) {
-    const cleanName = String(name || '').trim().replace(/\s+/g, ' ')
-    const cleanEmoji = String(emoji || '').trim()
-    const cleanImage = String(image_url || '').trim()
-    if (cleanName.length < 2) return { success: false, message: 'Type name is too short' }
-    if (!cleanEmoji && !cleanImage) {
-      return { success: false, message: 'Add an emoji or an image for the type' }
-    }
-    return this.create({
-      name: cleanName,
-      emoji: cleanEmoji || null,
-      image_url: cleanImage || null,
-      parent_id: null,
-      category_type: 'STANDARD',
-      is_active: true,
-    })
-  }
-
-  /**
    * Update a category [ADMIN]
    */
   async update(id, data) {

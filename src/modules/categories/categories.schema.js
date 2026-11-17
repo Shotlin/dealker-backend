@@ -91,27 +91,10 @@ export const createCategorySchema = {
       name: { type: 'string', minLength: 2, maxLength: 100 },
       description: { type: 'string', maxLength: 500 },
       image_url: { type: 'string' },
-      emoji: { type: ['string', 'null'], maxLength: 16 },
       parent_id: { oneOf: [{ type: 'string', format: 'uuid' }, { type: 'null' }] },
       sort_order: { type: 'integer', minimum: 0, default: 0 },
       is_active: { type: 'boolean' },
       category_type: { type: 'string', enum: ['STANDARD', 'BUNDLE'], default: 'STANDARD' },
-    },
-  },
-}
-
-export const createVendorTypeSchema = {
-  tags: ['Categories'],
-  summary: 'Vendor adds a product type (name + emoji or image) [VENDOR]',
-  security: [{ bearerAuth: [] }],
-  body: {
-    type: 'object',
-    required: ['name'],
-    additionalProperties: false,
-    properties: {
-      name: { type: 'string', minLength: 2, maxLength: 60 },
-      emoji: { type: 'string', maxLength: 16 },
-      image_url: { type: 'string', maxLength: 500 },
     },
   },
 }
@@ -133,7 +116,6 @@ export const updateCategorySchema = {
       name: { type: 'string', minLength: 2, maxLength: 100 },
       description: { type: 'string', maxLength: 500 },
       image_url: { type: 'string' },
-      emoji: { type: ['string', 'null'], maxLength: 16 },
       parent_id: { oneOf: [{ type: 'string', format: 'uuid' }, { type: 'null' }] },
       sort_order: { type: 'integer', minimum: 0 },
       is_active: { type: 'boolean' },
