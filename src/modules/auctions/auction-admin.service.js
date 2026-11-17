@@ -546,13 +546,14 @@ export async function getManage(actor, id) {
   const [regs, bids, ledgerRows, events, series, flags] = await Promise.all([
     query(
       `SELECT r.id, r.user_id, r.bidder_no, r.fee_amount, r.status, r.refund_amount, r.forfeited_amount, r.highest_bid,
-              r.bid_count, r.last_bid_at, r.created_at, u.name, u.phone, p.strikes, p.is_blocked
+              r.bid_count, r.last_bid_at, r.created_at, u.name, u.name AS username, u.phone, p.strikes, p.is_blocked
          FROM auction_registrations r JOIN users u ON u.id = r.user_id
          LEFT JOIN auction_bidder_profiles p ON p.user_id = r.user_id
         WHERE r.auction_id = $1 ORDER BY r.bidder_no`, [id]),
     query(
-      `SELECT b.seq, b.amount, b.max_amount, b.bid_type, b.is_leading, b.ip, b.created_at, b.user_id, r.bidder_no
+      `SELECT b.seq, b.amount, b.max_amount, b.bid_type, b.is_leading, b.ip, b.created_at, b.user_id, r.bidder_no, u.name AS bidder_name
          FROM auction_bids b LEFT JOIN auction_registrations r ON r.id = b.registration_id
+         LEFT JOIN users u ON u.id = b.user_id
         WHERE b.auction_id = $1 ORDER BY b.seq DESC LIMIT 300`, [id]),
     query(`SELECT entry_type, SUM(amount)::numeric(12,2) AS total, COUNT(*)::int AS n FROM auction_fee_ledger WHERE auction_id = $1 GROUP BY entry_type`, [id]),
     query(`SELECT id, event_type, actor_role, payload, created_at FROM auction_events WHERE auction_id = $1 ORDER BY id DESC LIMIT 100`, [id]),
@@ -566,12 +567,12 @@ export async function getManage(actor, id) {
     registrations: regs.rows.map((r) => ({
       ...r, fee_amount: Number(r.fee_amount), refund_amount: Number(r.refund_amount), forfeited_amount: Number(r.forfeited_amount),
       highest_bid: admin && r.highest_bid != null ? Number(r.highest_bid) : null,
-      name: admin ? r.name : null, phone: admin ? r.phone : mask(r.phone), alias: `Bidder #${r.bidder_no}`,
+      name: admin ? r.name : null, phone: admin ? r.phone : mask(r.phone), alias: `Bidder #${r.bidder_no}`, username: (r.username || '').trim() || null,
       user_id: admin ? r.user_id : null,
     })),
     bids: bids.rows.map((b) => ({
       seq: Number(b.seq), amount: Number(b.amount), type: b.bid_type, is_leading: b.is_leading, at: b.created_at,
-      alias: `Bidder #${b.bidder_no}`, max_amount: admin && b.max_amount != null ? Number(b.max_amount) : undefined,
+      alias: `Bidder #${b.bidder_no}`, username: (b.bidder_name || '').trim() || null, max_amount: admin && b.max_amount != null ? Number(b.max_amount) : undefined,
       ip: admin ? b.ip : undefined, user_id: admin ? b.user_id : undefined,
     })),
     price_series: series.rows.map((s) => ({ seq: Number(s.seq), amount: Number(s.amount), at: s.created_at })),
