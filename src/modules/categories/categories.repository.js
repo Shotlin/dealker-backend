@@ -33,7 +33,7 @@ export class CategoriesRepository {
    */
   async findAll() {
     const { rows } = await query(
-      `SELECT c.id, c.name, c.slug, c.description, c.image_url, c.parent_id, c.sort_order, c.is_active, c.category_type, c.created_at,
+      `SELECT c.id, c.name, c.slug, c.description, c.image_url, c.emoji, c.parent_id, c.sort_order, c.is_active, c.category_type, c.created_at,
               ${PRODUCT_COUNT_EXPR('c')} AS product_count
        FROM categories c
        WHERE c.deleted_at IS NULL AND c.is_active = true AND c.category_type != 'BUNDLE'
@@ -51,7 +51,7 @@ export class CategoriesRepository {
    */
   async findById(id) {
     const { rows } = await query(
-      `SELECT id, name, slug, description, image_url, parent_id, sort_order, is_active, category_type, created_at, updated_at
+      `SELECT id, name, slug, description, image_url, emoji, parent_id, sort_order, is_active, category_type, created_at, updated_at
        FROM categories WHERE id = $1`,
       [id]
     )
@@ -68,7 +68,7 @@ export class CategoriesRepository {
    */
   async findAllAdmin() {
     const { rows } = await query(
-      `SELECT c.id, c.name, c.slug, c.description, c.image_url, c.parent_id, c.sort_order, c.is_active, c.category_type, c.created_at,
+      `SELECT c.id, c.name, c.slug, c.description, c.image_url, c.emoji, c.parent_id, c.sort_order, c.is_active, c.category_type, c.created_at,
               ${PRODUCT_COUNT_EXPR('c')} AS product_count
        FROM categories c
        WHERE c.deleted_at IS NULL AND c.category_type != 'BUNDLE'
@@ -192,16 +192,17 @@ export class CategoriesRepository {
   /**
    * Create a new category (or bundle, when category_type='BUNDLE')
    */
-  async create({ name, slug, description, image_url, parent_id, sort_order, is_active, category_type }) {
+  async create({ name, slug, description, image_url, emoji, parent_id, sort_order, is_active, category_type }) {
     const { rows } = await query(
-      `INSERT INTO categories (name, slug, description, image_url, parent_id, sort_order, is_active, category_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, name, slug, description, image_url, parent_id, sort_order, is_active, category_type, created_at`,
+      `INSERT INTO categories (name, slug, description, image_url, emoji, parent_id, sort_order, is_active, category_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, name, slug, description, image_url, emoji, parent_id, sort_order, is_active, category_type, created_at`,
       [
         name,
         slug,
         description || null,
         image_url || null,
+        emoji || null,
         parent_id || null,
         sort_order || 0,
         is_active !== false,
@@ -219,7 +220,7 @@ export class CategoriesRepository {
     const params = []
     let idx = 1
 
-    const allowed = ['name', 'slug', 'description', 'image_url', 'parent_id', 'sort_order', 'is_active', 'category_type']
+    const allowed = ['name', 'slug', 'description', 'image_url', 'emoji', 'parent_id', 'sort_order', 'is_active', 'category_type']
     for (const key of allowed) {
       if (data[key] !== undefined) {
         fields.push(`${key} = $${idx++}`)
@@ -234,7 +235,7 @@ export class CategoriesRepository {
 
     const { rows } = await query(
       `UPDATE categories SET ${fields.join(', ')} WHERE id = $${idx}
-       RETURNING id, name, slug, description, image_url, parent_id, sort_order, is_active, category_type, created_at, updated_at`,
+       RETURNING id, name, slug, description, image_url, emoji, parent_id, sort_order, is_active, category_type, created_at, updated_at`,
       params
     )
     return rows[0]

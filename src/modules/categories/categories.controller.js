@@ -60,6 +60,15 @@ export class CategoriesController {
     return reply.code(201).send(success(result.category, 'Category created'))
   }
 
+  /** POST /vendor-type — vendor adds a product type */
+  async createVendorType(request, reply) {
+    const result = await this.service.createVendorType(request.body)
+    if (!result.success) {
+      return reply.code(400).send(error(result.message, 'VALIDATION'))
+    }
+    return reply.code(201).send(success(result.category, 'Product type created'))
+  }
+
   /** PUT /:id */
   async update(request, reply) {
     const result = await this.service.update(request.params.id, request.body)
