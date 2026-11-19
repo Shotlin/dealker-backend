@@ -4,14 +4,17 @@
  * What a vendor CAN do (vendor-scoped, mounted at /api/v1/manage/returns):
  *   - list + open the returns raised on their seller orders (reason, photos, items, status timeline, pickup, QC)
  *   - answer a return once ("I agree" / "I dispute" + note + photos); the team sees it in the staff case file
+ *   - approve the RETURN or reject it, each with a reason (time is recorded)
+ *   - arrange the return pickup (courier, tracking no., date) and update its status
  *   - open a chat with Dealkr Support about a return (a support ticket owned by the vendor user)
  *
- * What a vendor can NOT do (by design — the Dealkr team decides and moves the money): approve, reject,
- * refund, schedule the pickup or mark the item received. The customer's contact details are never returned.
+ * What a vendor can NOT do: refund. Only the Dealkr team's approve in /admin/refund-requests moves money.
+ * The customer's contact details are never returned.
  *
  * @module modules/vendor-returns/vendor-returns.service
  */
 
+import { logAdminActivity } from '../../utils/activityLogger.js'
 import { query, getClient } from '../../config/database.js'
 import { logger } from '../../config/logger.js'
 import { toCustomerView } from '../refund-requests/refund-requests.service.js'
@@ -30,7 +33,9 @@ export class VendorReturnError extends Error {
 const OPEN = ['PENDING', 'PROCESSING']
 const money = (n) => Number(Number(n || 0).toFixed(2))
 const returnNumber = (id) => `RTN${String(id).replace(/-/g, '').slice(0, 8).toUpperCase()}`
-const journey = new ReturnJourneyService()
+let journey = new ReturnJourneyService()
+/** Routes hand in the notifier so pickup updates reach the customer. */
+export function setNotifier(notifier) { journey = new ReturnJourneyService({ notifier }) }
 
 export const REASON_LABELS = {
   PRODUCT_NOT_WORKING: 'Product not working',
@@ -207,6 +212,17 @@ async function chatFor(userId, refundRequestId) {
   return t ? { ticket_id: t.id, ticket_number: t.ticket_number, status: t.status, unread: Number(t.customer_unread || 0) } : null
 }
 
+/** The vendor's own approve / reject decision with its reason and time (from the case file). */
+async function decisionFor(id, vendorId) {
+  const { rows: [e] } = await query(
+    `SELECT metadata->>'kind' AS kind, body, created_at FROM refund_case_events
+      WHERE refund_request_id = $1 AND type = 'NOTE' AND metadata->>'vendorId' = $2
+        AND metadata->>'kind' IN ('VENDOR_APPROVED','VENDOR_REJECTED')
+      ORDER BY created_at DESC LIMIT 1`, [id, vendorId])
+  if (!e) return null
+  return { decision: e.kind === 'VENDOR_APPROVED' ? 'APPROVED' : 'REJECTED', reason: e.body, at: e.created_at }
+}
+
 export async function detail(vendorId, userId, id) {
   const rr = await loadMine(vendorId, userId, id)
   const lines = await myLines(vendorId, rr)
@@ -214,6 +230,7 @@ export async function detail(vendorId, userId, id) {
   const view = toCustomerView(rr, j)
   const { rows: [resp] } = await query(
     `SELECT stance, note, evidence, created_at, updated_at FROM refund_vendor_responses WHERE refund_request_id = $1 AND vendor_id = $2`, [id, vendorId])
+  const decision = await decisionFor(id, vendorId)
 
   // The customer-facing journey, plus the vendor's own answer slotted in right after the request.
   const timeline = [...view.timeline]
@@ -238,7 +255,10 @@ export async function detail(vendorId, userId, id) {
     qc: view.qc ? { checks: view.qc.checks, summary: view.qc.summary, inspected_at: view.qc.inspected_at } : null,
     team_note: rr.status === 'REJECTED' ? (rr.admin_notes || null) : null,
     response: resp ? { stance: resp.stance, note: resp.note, evidence: resp.evidence, at: resp.updated_at } : null,
-    can_respond: OPEN.includes(rr.status),
+    can_respond: OPEN.includes(rr.status) && !decision,
+    decision,
+    can_decide: OPEN.includes(rr.status) && !rr.return_approved_at && !decision,
+    can_arrange_pickup: OPEN.includes(rr.status) && !!rr.return_approved_at,
     chat: await chatFor(userId, id),
   }
 }
@@ -257,6 +277,10 @@ export async function respond(vendorId, userId, id, { stance, note, evidence = [
     await client.query('BEGIN')
     const { rows: [lock] } = await client.query(`SELECT status, investigation_status FROM refund_requests WHERE id = $1 FOR UPDATE`, [id])
     if (!OPEN.includes(lock.status)) throw new VendorReturnError(409, 'RETURN_CLOSED', `This return is already ${lock.status.toLowerCase()}, so it can no longer be answered.`)
+    const { rows: [decision] } = await client.query(
+      `SELECT id FROM refund_case_events WHERE refund_request_id = $1 AND type = 'NOTE'
+       AND metadata->>'vendorId' = $2 AND metadata->>'kind' IN ('VENDOR_APPROVED','VENDOR_REJECTED') LIMIT 1`, [id, vendorId])
+    if (decision) throw new VendorReturnError(409, 'DECISION_EXISTS', 'Your decision has already been recorded; contact Dealkr support to provide more information.')
 
     const { rows: [prev] } = await client.query(`SELECT case_evidence_ids FROM refund_vendor_responses WHERE refund_request_id = $1 AND vendor_id = $2`, [id, vendorId])
     if (prev?.case_evidence_ids?.length) await client.query(`DELETE FROM refund_case_evidence WHERE id = ANY($1::uuid[])`, [prev.case_evidence_ids])
@@ -295,6 +319,80 @@ export async function respond(vendorId, userId, id, { stance, note, evidence = [
   } finally {
     client.release()
   }
+  return detail(vendorId, userId, id)
+}
+
+/** The vendor approves the return (pickup can then be arranged) or rejects it — always with a reason. Never moves money. */
+export async function decide(vendorId, userId, id, { decision, reason }, ip = null) {
+  const rr = await loadMine(vendorId, userId, id)
+  if (!OPEN.includes(rr.status)) throw new VendorReturnError(409, 'RETURN_CLOSED', `This return is already ${rr.status.toLowerCase()}.`)
+  if (rr.return_approved_at) throw new VendorReturnError(409, 'ALREADY_APPROVED', 'This return is already approved.')
+  const text = String(reason || '').trim()
+  if (text.length < 3) throw new VendorReturnError(400, 'VALIDATION_ERROR', 'Please write the reason.')
+  const approve = decision === 'APPROVE'
+  if (!approve && text.length < 10) throw new VendorReturnError(400, 'VALIDATION_ERROR', 'Please provide a detailed reason for rejecting the return.')
+  const client = await getClient()
+  try {
+    await client.query('BEGIN')
+    const { rows: [lock] } = await client.query(`SELECT status, return_approved_at FROM refund_requests WHERE id = $1 FOR UPDATE`, [id])
+    if (!OPEN.includes(lock.status) || lock.return_approved_at) throw new VendorReturnError(409, 'RETURN_CLOSED', 'This return was just updated. Please reopen it.')
+    const { rows: [prior] } = await client.query(
+      `SELECT id FROM refund_case_events WHERE refund_request_id = $1 AND type = 'NOTE'
+       AND metadata->>'vendorId' = $2 AND metadata->>'kind' IN ('VENDOR_APPROVED','VENDOR_REJECTED') LIMIT 1`, [id, vendorId])
+    if (prior) throw new VendorReturnError(409, 'DECISION_EXISTS', 'Your decision has already been recorded.')
+    if (approve) {
+      await client.query(`UPDATE refund_requests SET return_approved_at = NOW(), updated_at = NOW() WHERE id = $1`, [id])
+    } else {
+      const { rows: [response] } = await client.query(
+        `SELECT stance, evidence FROM refund_vendor_responses WHERE refund_request_id = $1 AND vendor_id = $2`, [id, vendorId])
+      if (response?.stance !== 'DISPUTE' || !Array.isArray(response.evidence) || response.evidence.length === 0) {
+        throw new VendorReturnError(400, 'REJECTION_EVIDENCE_REQUIRED', 'Submit a dispute with supporting evidence before rejecting this return.')
+      }
+      await client.query(
+        `UPDATE refund_requests SET investigation_status = 'OPEN', updated_at = NOW() WHERE id = $1`, [id])
+    }
+    await client.query(
+      `INSERT INTO refund_case_events (refund_request_id, type, party, title, body, metadata, actor_id)
+       VALUES ($1,'NOTE','SELLER',$2,$3,$4::jsonb,$5)`,
+      [id, approve ? 'Seller approved the return' : 'Seller rejected the return', text, JSON.stringify({ vendorId, kind: approve ? 'VENDOR_APPROVED' : 'VENDOR_REJECTED' }), userId])
+    await client.query('COMMIT')
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw err
+  } finally {
+    client.release()
+  }
+  logAdminActivity(userId, approve ? 'VENDOR_APPROVE_RETURN' : 'VENDOR_REJECT_RETURN', 'refund_request', id, null, { reason: text }, ip)
+  await notifyCustomer(rr, approve ? 'Return approved' : 'Return sent for review',
+    approve ? `Your return for order ${rr.order_number} was approved. ${text}` : `The seller disputed your return for order ${rr.order_number}. The Dealkr team will review it. ${text}`)
+  return detail(vendorId, userId, id)
+}
+
+async function notifyCustomer(rr, title, body) {
+  try {
+    await journey.notifier?.sendNotification(rr.customer_id, {
+      title, body, type: 'ORDER_STATUS',
+      data: { type: 'ORDER_STATUS', orderId: rr.order_id, orderNumber: rr.order_number, refundRequestId: rr.id },
+    })
+  } catch (err) {
+    logger.warn({ err: err?.message, id: rr.id }, 'Return notification failed (non-blocking)')
+  }
+}
+
+/** Arrange (or update) the reverse pickup. Needs the return to be approved first. */
+export async function savePickup(vendorId, userId, id, input, ip = null) {
+  const rr = await loadMine(vendorId, userId, id)
+  if (!OPEN.includes(rr.status)) throw new VendorReturnError(409, 'RETURN_CLOSED', `This return is already ${rr.status.toLowerCase()}.`)
+  if (!rr.return_approved_at) throw new VendorReturnError(409, 'NOT_APPROVED', 'Approve the return before arranging the pickup.')
+  await journey.savePickup(id, input, { userId, shopId: null, ip })
+  return detail(vendorId, userId, id)
+}
+
+/** Move the pickup along: picked up, on the way, received, failed or cancelled. */
+export async function setPickupStatus(vendorId, userId, id, { status, note }, ip = null) {
+  const rr = await loadMine(vendorId, userId, id)
+  if (!OPEN.includes(rr.status)) throw new VendorReturnError(409, 'RETURN_CLOSED', `This return is already ${rr.status.toLowerCase()}.`)
+  await journey.setPickupStatus(id, status, note, { userId, shopId: null, ip })
   return detail(vendorId, userId, id)
 }
 

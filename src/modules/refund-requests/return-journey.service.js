@@ -236,8 +236,13 @@ export class ReturnJourneyService {
       [id, JSON.stringify(checks), input.summary || null, original, revised, priceStatus, actor.userId])
     await query(`UPDATE refund_requests SET return_approved_at = COALESCE(return_approved_at, NOW()), updated_at = NOW() WHERE id = $1`, [id])
     logAdminActivity(actor.userId, 'SAVE_RETURN_QC', 'refund_request', id, prev || null, { checks, revised }, actor.ip)
+    const failed = checks.some((check) => check.status === 'FAILED')
     await this.#notify(r, revised == null ? 'Quality check done' : 'Price changed after quality check',
-      revised == null ? `Your item for order ${r.order_number} passed the quality check.` : `The refund for order ${r.order_number} changed to ₹${revised}. Please confirm in the app.`)
+      revised == null
+        ? failed
+          ? `The quality check for order ${r.order_number} found an issue. Please review the report in the app.`
+          : `The quality check for order ${r.order_number} is complete. Please review the report in the app.`
+        : `The refund for order ${r.order_number} changed to ₹${revised}. Please confirm in the app.`)
     return this.journey(id)
   }
 

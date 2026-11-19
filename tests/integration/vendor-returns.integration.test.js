@@ -247,6 +247,25 @@ d('vendor returns (real database)', () => {
     expect((await get('/manage/returns?state=needs_response', T.b)).json().data.map((r) => r.id)).toContain(rid)
   })
 
+  it('requires supporting evidence for a vendor rejection and sends it to admin review without closing the request', async () => {
+    const order = await deliveredOrder(T.cust, T.a, T.b)
+    const rr = await one(
+      `INSERT INTO refund_requests (order_id, customer_id, scope, items, reason, refund_destination, computed_amount, source)
+       VALUES ($1,$2,'ITEMS',$3::jsonb,'Screen damaged','WALLET',1000,'CUSTOMER') RETURNING id`,
+      [order.id, T.cust.id, JSON.stringify([{ orderItemId: order.lines.a }])])
+    const reject = () => post(`/manage/returns/${rr.id}/decision`, T.a, { decision: 'REJECT', reason: 'Packing evidence shows no damage' })
+    expect((await reject()).json().code).toBe('REJECTION_EVIDENCE_REQUIRED')
+    expect((await post(`/manage/returns/${rr.id}/respond`, T.a, {
+      stance: 'DISPUTE', note: 'Please review the packing video', evidence: [{ kind: 'VIDEO', url: 'https://example.com/packing.mp4' }],
+    })).statusCode).toBe(200)
+    expect((await reject()).statusCode).toBe(200)
+    expect(await one(`SELECT status, investigation_status FROM refund_requests WHERE id = $1`, [rr.id])).toMatchObject({ status: 'PENDING', investigation_status: 'OPEN' })
+    expect((await reject()).statusCode).toBe(409)
+    expect((await post(`/manage/returns/${rr.id}/respond`, T.a, { stance: 'AGREE', note: 'Changed my mind' })).statusCode).toBe(409)
+    expect((await q(`SELECT 1 FROM refund_case_evidence WHERE refund_request_id = $1 AND side = 'SELLER'`, [rr.id])).rows).toHaveLength(1)
+    expect((await get(`/manage/returns/${rr.id}`, T.b)).statusCode).toBe(404)
+  })
+
   it('the customer still gets the exact same refund-request view (no vendor data leaks)', async () => {
     const o3 = await deliveredOrder(T.cust, T.a, T.b)
     await q(

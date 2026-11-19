@@ -62,6 +62,13 @@ describe('QC price revision', () => {
     db.query.mockImplementation(async (sql) => ({ rows: /FROM refund_requests r JOIN orders/.test(sql) ? [open] : [] }))
     await expect(svc.saveQc('rr1', { checks: [{ label: 'Screen', status: 'GOOD' }] }, { userId: 'a1' })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
   })
+  it('does not tell the customer that a failed quality check passed', async () => {
+    const notifier = { sendNotification: vi.fn() }
+    const service = new ReturnJourneyService({ notifier })
+    db.query.mockImplementation(async (sql) => ({ rows: /FROM refund_requests r JOIN orders/.test(sql) ? [open] : [] }))
+    await service.saveQc('rr1', { checks: [{ label: 'Screen', status: 'FAILED' }] }, { userId: 'a1' })
+    expect(notifier.sendNotification).toHaveBeenCalledWith('c1', expect.objectContaining({ body: expect.stringContaining('found an issue') }))
+  })
   it('approval waits while the customer has not answered, and uses the accepted price afterwards', async () => {
     db.query.mockImplementation(async () => ({ rows: [{ price_status: 'PROPOSED', revised_price: '9999' }] }))
     await expect(svc.approvalAmount('rr1')).rejects.toMatchObject({ code: 'QC_PRICE_PENDING' })
