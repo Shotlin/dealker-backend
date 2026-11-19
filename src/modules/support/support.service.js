@@ -207,7 +207,8 @@ export const supportService = {
   },
 
   /** Admin "start chat" from an order / refund request — reuses an open conversation if one exists. */
-  async startFromContext({ orderId, refundRequestId, actorId }) {
+  async startFromContext({ orderId, refundRequestId, vendorId = null, actorId }) {
+    if (vendorId) return this.startVendorChat({ refundRequestId, vendorId, actorId })
     let userId; let subject; let category = 'ORDER'; let message; let oid = orderId || null
     if (refundRequestId) {
       const ex = await query(`SELECT id FROM support_tickets WHERE refund_request_id = $1 AND status = ANY($2) AND channel <> 'VENDOR_APP' LIMIT 1`, [refundRequestId, OPEN_STATUSES])
@@ -228,6 +229,42 @@ export const supportService = {
       message = `Support opened a conversation about your order ${rows[0].order_number}.`
     } else throw httpError(400, 'orderId or refundRequestId required', 'VALIDATION_ERROR')
     return this.create({ userId, subject, message, category, orderId: oid, refundRequestId: refundRequestId || null, channel: 'ADMIN', senderType: 'SYSTEM', actorId, assignTo: actorId })
+  },
+
+  /**
+   * Admin opens a private chat with ONE vendor about a return. It is a separate ticket (channel VENDOR_APP,
+   * owned by the vendor's staff) so the customer can never see it. The vendor must have an order in this return.
+   */
+  async startVendorChat({ refundRequestId, vendorId, actorId }) {
+    if (!refundRequestId) throw httpError(400, 'refundRequestId required', 'VALIDATION_ERROR')
+    const { rows: [rr] } = await query(
+      `SELECT r.order_id, o.order_number FROM refund_requests r JOIN orders o ON o.id = r.order_id
+        WHERE r.id = $1 AND EXISTS (SELECT 1 FROM seller_orders so WHERE so.order_id = r.order_id AND so.vendor_id = $2)`, [refundRequestId, vendorId])
+    if (!rr) throw httpError(404, 'This vendor has no items in that return', 'NOT_FOUND')
+    const { rows: staff } = await query(
+      `SELECT user_id FROM vendor_users WHERE vendor_id = $1 AND is_active = true AND deleted_at IS NULL ORDER BY created_at`, [vendorId])
+    if (!staff.length) throw httpError(409, 'This vendor has no active staff to chat with', 'NO_VENDOR_USER')
+    let first = null
+    for (const { user_id: uid } of staff) {
+      const ex = await query(
+        `SELECT id FROM support_tickets WHERE refund_request_id = $1 AND user_id = $2 AND channel = 'VENDOR_APP' AND status = ANY($3) LIMIT 1`,
+        [refundRequestId, uid, OPEN_STATUSES])
+      let tid = ex.rows[0]?.id
+      if (!tid) {
+        const out = await this.create({
+          userId: uid, subject: `Dealkr team · Return · Order ${rr.order_number}`,
+          message: `Dealkr support opened this chat about the return on order ${rr.order_number}.`,
+          category: 'RETURN_REFUND', orderId: rr.order_id, refundRequestId, channel: 'VENDOR_APP',
+          senderType: 'SYSTEM', actorId, assignTo: actorId, verifiedOrder: true,
+        })
+        tid = out.ticket.id
+        await query(
+          `INSERT INTO notifications (user_id, title, body, type, data) VALUES ($1,'Dealkr team opened a chat',$2,'SUPPORT',$3)`,
+          [uid, `About the return on order ${rr.order_number}`, JSON.stringify({ ticketId: tid, refundRequestId })]).catch(() => {})
+      }
+      first = first || tid
+    }
+    return this.detail(first)
   },
 
   // ── Messages ─────────────────────────────────────────────────────────

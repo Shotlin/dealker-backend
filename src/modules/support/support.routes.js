@@ -28,7 +28,7 @@ export async function adminSupportRoutes(fastify) {
 
   fastify.post('/tickets/start', {
     preHandler: pre,
-    schema: { body: { type: 'object', properties: { orderId: uuid, refundRequestId: uuid }, additionalProperties: false } },
+    schema: { body: { type: 'object', properties: { orderId: uuid, refundRequestId: uuid, vendorId: uuid }, additionalProperties: false } },
   }, wrap(async (req) => ({ success: true, data: await svc.startFromContext({ ...req.body, actorId: me(req) }) })))
 
   fastify.get('/tickets/:id', { preHandler: pre, schema: { params: { type: 'object', properties: { id: uuid } } } },

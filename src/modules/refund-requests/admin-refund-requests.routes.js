@@ -8,7 +8,7 @@ import { ReturnJourneyService } from './return-journey.service.js'
  * expects (see dealker-dashboard/src/types/refund-request.types.ts).
  */
 const SELECT = `
-  SELECT r.*, o.order_number, o.total_payable AS order_total, o.wallet_amount AS order_wallet_amount,
+  SELECT r.*, o.order_number, o.created_at AS order_created_at, o.total_payable AS order_total, o.wallet_amount AS order_wallet_amount,
          u.name AS customer_name, u.phone AS customer_phone, io.name AS investigation_owner_name
     FROM refund_requests r
     JOIN orders o ON o.id = r.order_id
@@ -19,6 +19,7 @@ const toView = (r) => ({
   id: r.id,
   order_id: r.order_id,
   order_number: r.order_number,
+  order_created_at: r.order_created_at,
   user_id: r.customer_id,
   customer_name: r.customer_name,
   customer_phone: r.customer_phone,
